@@ -32,6 +32,9 @@
 #endif
 #include "knot/modules/whoami/whoami.h"
 #include "knot/modules/noudp/noudp.h"
+#if HAVE_GEOIP
+#include "knot/modules/geoip/geoip.h"
+#endif
 
 /*! \note All modules should be dynamically loaded later on. */
 static_module_t MODULES[] = {
@@ -48,6 +51,9 @@ static_module_t MODULES[] = {
 #endif
 	{ C_MOD_WHOAMI,       &whoami_load,       &whoami_unload,       MOD_SCOPE_ANY, true },
 	{ C_MOD_NOUDP,        &noudp_load,        &noudp_unload,        MOD_SCOPE_ANY, true },
+#if HAVE_GEOIP
+	{ C_MOD_GEOIP,        &geoip_load,        &geoip_unload,        MOD_SCOPE_ANY },
+#endif
 	{ NULL }
 };
 

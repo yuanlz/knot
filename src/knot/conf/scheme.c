@@ -41,6 +41,9 @@
 #endif
 #include "knot/modules/whoami/whoami.h"
 #include "knot/modules/noudp/noudp.h"
+#if HAVE_GEOIP
+#include "knot/modules/geoip/geoip.h"
+#endif
 
 #define HOURS(x)	((x) * 3600)
 #define DAYS(x)		((x) * HOURS(24))
@@ -309,6 +312,10 @@ const yp_item_t conf_scheme[] = {
 	{ C_MOD_ONLINE_SIGN,  YP_TGRP, YP_VGRP = { scheme_mod_online_sign }, FMOD },
 	{ C_MOD_WHOAMI,       YP_TGRP, YP_VGRP = { scheme_mod_whoami }, FMOD },
 	{ C_MOD_NOUDP,        YP_TGRP, YP_VGRP = { scheme_mod_noudp }, FMOD },
+#if HAVE_GEOIP
+	{ C_MOD_GEOIP,        YP_TGRP, YP_VGRP = { scheme_mod_geoip }, YP_FMULTI,
+	                                         { geoip_check } },
+#endif
 /***********/
 	{ C_TPL,  YP_TGRP, YP_VGRP = { desc_template }, YP_FMULTI, { check_template } },
 	{ C_ZONE, YP_TGRP, YP_VGRP = { desc_zone }, YP_FMULTI | CONF_IO_FZONE, { check_zone } },

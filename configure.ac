@@ -394,6 +394,21 @@ AC_ARG_ENABLE([rosedb],
 AS_IF([test "$enable_rosedb" = yes], [AC_DEFINE([HAVE_ROSEDB], [1], [Define to 1 to enable static RR query module.])])
 AM_CONDITIONAL([HAVE_ROSEDB], [test "$enable_rosedb" = yes])
 
+# GeoIP module
+AC_ARG_ENABLE([geoip],
+    AS_HELP_STRING([--enable-geoip=auto|yes|no], [enable GeoIP module [default=auto]]),
+    [enable_geoip="$enableval"], [enable_geoip=auto])
+
+AS_IF([test "$enable_geoip" != "no"],[
+  AS_CASE([$enable_geoip],
+    [auto],[PKG_CHECK_MODULES([libmaxminddb], [libmaxminddb], [enable_geoip=yes], [enable_geoip=no])],
+    [yes], [PKG_CHECK_MODULES([libmaxminddb], [libmaxminddb])],
+    [*],[AC_MSG_ERROR([Invalid value of --enable-geoip.])])
+    ])
+
+AS_IF([test "$enable_geoip" = yes], [AC_DEFINE([HAVE_GEOIP], [1], [Define to 1 to enable GeoIP module.])])
+AM_CONDITIONAL([HAVE_GEOIP], [test "$enable_geoip" = yes])
+
 # libedit
 AS_IF([test "$enable_daemon" = "yes" -o "$enable_utilities" = "yes"], [
   PKG_CHECK_MODULES([libedit], [libedit], [with_libedit=yes], [
@@ -553,6 +568,7 @@ AC_MSG_RESULT([
     Jansson:  ${jansson_LIBS} ${jansson_CFLAGS}
     Libedit:  ${libedit_LIBS} ${libedit_CFLAGS}
     LMDB:     ${enable_lmdb} ${lmdb_LIBS} ${lmdb_CFLAGS}
+    GeoIP:    ${enable_geoip} ${libmaxminddb_LIBS} ${libmaxminddb_CFLAGS}
 
     Sanitizer: ${sanitize_CFLAGS}
     LibFuzzer: ${libfuzzer_LIBS}
