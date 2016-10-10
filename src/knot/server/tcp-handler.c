@@ -106,6 +106,7 @@ static void on_close_free(uv_handle_t* handle);
 
 static void client_free(void *ctx)
 {
+	log_debug(__func__);
 	tcp_client_t *client = ctx;
 	mp_delete(client->layer.mm->ctx);
 	mp_delete(client->mm.ctx);
@@ -134,8 +135,9 @@ static tcp_client_t *client_alloc(uv_loop_t *loop)
 
 static void server_free(void *ctx)
 {
+	log_debug(__func__);
 	tcp_server_t *server = ctx;
-	ref_release(server->ifaces_ref);
+//	ref_release(server->ifaces_ref);
 	free(server);
 }
 
@@ -156,7 +158,7 @@ static int server_alloc_listen(tcp_server_t **res, uv_loop_t *loop, int fd, ref_
 	uv_tcp_open(&server->handle, fd);
 	server->handle.data = server;
 	server->ifaces_ref = ref;
-	ref_retain(server->ifaces_ref);
+//	ref_retain(server->ifaces_ref);
 	int ret = uv_listen((uv_stream_t *) &server->handle, TCP_BACKLOG_SIZE, on_connection);
 	if (ret  < 0) {
 		struct sockaddr_storage ss;
@@ -337,6 +339,7 @@ static void on_connection(uv_stream_t* server, int status)
 
 static void on_close_free(uv_handle_t* handle)
 {
+	log_debug("handle_close");
 	if (handle->type == UV_TCP) {
 		tcp_ctx_t *ctx = handle->data;
 		if (ctx != NULL) {
@@ -355,9 +358,15 @@ static void close_client(uv_handle_t* handle, void* arg)
 	}
 }
 
+static void close_tcp(uv_handle_t* handle, void* arg)
+{
+	if (handle->type == UV_TCP) {
+		uv_close(handle, on_close_free);
+	}
+}
+
 static void close_all(uv_handle_t* handle, void* arg)
 {
-	log_debug("handle_close");
 	uv_close(handle, on_close_free);
 
 }
@@ -376,18 +385,19 @@ static void reconfigure_loop(uv_loop_t *loop)
 	loop_ctx_t *tcp = loop->data;
 	iface_t *i = NULL;
 
-	uv_walk(loop, close_client, NULL);
-	if (tcp->old_ifaces != NULL) {
+	//uv_walk(loop, close_client, NULL);
+	uv_walk(loop, close_tcp , NULL);
+	/*if (tcp->old_ifaces != NULL) {
 		WALK_LIST(i, tcp->old_ifaces->u) {
 			uv_walk(loop, close_handle_fd, &i->fd_tcp);
 		}
 		ref_release(&tcp->old_ifaces->ref);
-	}
+	}*/
 
 	rcu_read_lock();
 	tcp->old_ifaces  = tcp->handler->server->ifaces;
 	int multiproccess = tcp->server->handlers[IO_TCP].size > 1;
-	WALK_LIST(i, tcp->handler->server->ifaces->u) {
+	WALK_LIST(i, tcp->handler->server->ifaces->l) {
 		tcp_server_t *server;
 		int fd = dup(i->fd_tcp);
 		if (server_alloc_listen(&server, loop, fd,
