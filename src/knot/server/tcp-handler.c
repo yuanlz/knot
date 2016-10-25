@@ -141,7 +141,20 @@ static void server_free(void *ctx)
 	free(server);
 }
 
-static int server_alloc_listen(tcp_server_t **res, uv_loop_t *loop, int fd, ref_t *ref)
+/*! COPY PASTE !!!
+ * \brief Enable socket option.
+ */
+static int sockopt_enable(int sock, int level, int optname)
+{
+	const int enable = 1;
+	if (setsockopt(sock, level, optname, &enable, sizeof(enable)) != 0) {
+		return knot_map_errno();
+	}
+
+	return KNOT_EOK;
+}
+
+static int server_alloc_listen(tcp_server_t **res, uv_loop_t *loop, iface_t *i)
 {
 	tcp_server_t *server;
 	if (loop == NULL || res == NULL) {
@@ -154,17 +167,26 @@ static int server_alloc_listen(tcp_server_t **res, uv_loop_t *loop, int fd, ref_
 	memset(server, 0, sizeof(tcp_server_t));
 	server->ctx.free = server_free;
 	server->ctx.type = TCP_SERVER;
-	uv_tcp_init(loop, &server->handle);
-	uv_tcp_open(&server->handle, fd);
+	//uv_tcp_init(loop, &server->handle);
+	uv_tcp_init_ex(loop, &server->handle, i->addr.ss_family);
+	int fd = -1;
+	uv_fileno((uv_handle_t *)&server->handle, &fd);
+	sockopt_enable(fd, SOL_SOCKET, SO_REUSEPORT);
+
+	char addr_str[SOCKADDR_STRLEN] = {0};
+
+	sockaddr_tostr(addr_str, sizeof(addr_str), (struct sockaddr *)&i->addr);
+	log_debug("open socket, address '%s'", addr_str);
+
+
+	uv_tcp_bind(&server->handle, (struct sockaddr *)&i->addr, /* i->addr.ss_family == AF_INET6 ? UV_TCP_IPV6ONLY : */ 0);
+
 	server->handle.data = server;
-	server->ifaces_ref = ref;
-//	ref_retain(server->ifaces_ref);
 	int ret = uv_listen((uv_stream_t *) &server->handle, TCP_BACKLOG_SIZE, on_connection);
 	if (ret  < 0) {
 		struct sockaddr_storage ss;
 		int addrlen = sizeof(struct sockaddr_storage);
 		uv_tcp_getsockname(&server->handle, (struct sockaddr *)&ss, &addrlen);
-		char addr_str[SOCKADDR_STRLEN] = {0};
 		sockaddr_tostr(addr_str, sizeof(addr_str), (struct sockaddr *)&ss);
 		log_error("cannot open socket, address '%s' (%s)", addr_str, uv_strerror(ret));
 		return KNOT_ERROR;
@@ -206,6 +228,7 @@ static int generate_answer(tcp_client_t *client, write_ctx_t *write)
 			write->pktsize = htons(write->ans->size);
 			write->tx[1].base = (char *)write->ans->wire;
 			write->tx[1].len = write->ans->size;
+			log_debug("qtype: %u", knot_pkt_qtype(write->ans));
 			uv_write(&write->req, (uv_stream_t *)&client->handle, write->tx, 2, on_write);
 			return WRITE;
 		}
@@ -399,9 +422,8 @@ static void reconfigure_loop(uv_loop_t *loop)
 	int multiproccess = tcp->server->handlers[IO_TCP].size > 1;
 	WALK_LIST(i, tcp->handler->server->ifaces->l) {
 		tcp_server_t *server;
-		int fd = dup(i->fd_tcp);
-		if (server_alloc_listen(&server, loop, fd,
-		    &tcp->old_ifaces->ref) == KNOT_EOK) {
+//		int fd = dup(i->fd_tcp);
+		if (server_alloc_listen(&server, loop, i) == KNOT_EOK) {
 			uv_tcp_simultaneous_accepts(&server->handle, !multiproccess);
 		}
 	}

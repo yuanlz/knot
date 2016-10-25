@@ -52,10 +52,10 @@ static void server_deinit_iface(iface_t *iface)
 	}
 	free(iface->fd_udp);
 
-	/* Free TCP handler. */
-	if (iface->fd_tcp > -1) {
-		close(iface->fd_tcp);
-	}
+//	/* Free TCP handler. */
+//	if (iface->fd_tcp > -1) {
+//		close(iface->fd_tcp);
+//	}
 
 	memset(iface, 0, sizeof(*iface));
 }
@@ -206,28 +206,28 @@ static int server_init_iface(iface_t *new_if, struct sockaddr_storage *addr, int
 		new_if->fd_udp_count += 1;
 	}
 
-	/* Create bound TCP socket. */
-	int sock = net_bound_socket(SOCK_STREAM, (struct sockaddr *)addr, bind_flags);
-	if (sock < 0) {
-		log_error("cannot bind address '%s' (%s)", addr_str,
-		          knot_strerror(sock));
-		server_deinit_iface(new_if);
-		return sock;
-	}
-
-	if (!enlarge_net_buffers(sock, TCP_MIN_RCVSIZE, TCP_MIN_SNDSIZE)) {
-		log_warning("failed to set network buffer sizes for TCP");
-	}
-
-	new_if->fd_tcp = sock;
-
-	/* Listen for incoming connections. */
-	ret = listen(sock, TCP_BACKLOG_SIZE);
-	if (ret < 0) {
-		log_error("failed to listen on TCP interface '%s'", addr_str);
-		server_deinit_iface(new_if);
-		return KNOT_ERROR;
-	}
+//	/* Create bound TCP socket. */
+//	int sock = net_bound_socket(SOCK_STREAM, (struct sockaddr *)addr, bind_flags);
+//	if (sock < 0) {
+//		log_error("cannot bind address '%s' (%s)", addr_str,
+//		          knot_strerror(sock));
+//		server_deinit_iface(new_if);
+//		return sock;
+//	}
+//
+//	if (!enlarge_net_buffers(sock, TCP_MIN_RCVSIZE, TCP_MIN_SNDSIZE)) {
+//		log_warning("failed to set network buffer sizes for TCP");
+//	}
+//
+//	new_if->fd_tcp = sock;
+//
+//	/* Listen for incoming connections. */
+//	ret = listen(sock, TCP_BACKLOG_SIZE);
+//	if (ret < 0) {
+//		log_error("failed to listen on TCP interface '%s'", addr_str);
+//		server_deinit_iface(new_if);
+//		return KNOT_ERROR;
+//	}
 
 	return KNOT_EOK;
 }

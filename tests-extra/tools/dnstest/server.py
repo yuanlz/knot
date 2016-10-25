@@ -76,7 +76,7 @@ class Server(object):
     START_WAIT_VALGRIND = 5
     STOP_TIMEOUT = 30
     COMPILE_TIMEOUT = 60
-    DIG_TIMEOUT = 10
+    DIG_TIMEOUT = 5
 
     # Instance counter.
     count = 0
