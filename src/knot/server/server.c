@@ -440,6 +440,20 @@ static int server_init_handler(server_t *server, int index, int thread_count,
 		return KNOT_ENOMEM;
 	}
 
+	if (index == IO_TCP_WORKER) {
+		h->pipe = calloc(thread_count, 2*sizeof(int));
+		if (h->pipe == NULL) {
+			free(h->thread_id);
+			free(h->thread_state);
+			dt_delete(&h->unit);
+			return KNOT_ENOMEM;
+		} else {
+			for (int i = 0; i < thread_count; ++i) {
+				socketpair(AF_UNIX, SOCK_STREAM, 0, h->pipe+2*i);
+			}
+		}
+	}
+
 	return KNOT_EOK;
 }
 
@@ -459,6 +473,7 @@ static void server_free_handler(iohandler_t *h)
 	dt_delete(&h->unit);
 	free(h->thread_state);
 	free(h->thread_id);
+	free(h->pipe);
 	memset(h, 0, sizeof(iohandler_t));
 }
 
@@ -652,7 +667,13 @@ static int reconfigure_threads(conf_t *conf, server_t *server)
 		return ret;
 	}
 
-	return reset_handler(server, IO_TCP, conf_tcp_threads(conf), tcp_master);
+
+	ret = reset_handler(server, IO_TCP_WORKER, conf_tcp_threads(conf), tcp_worker);
+	if (ret != KNOT_EOK) {
+		return ret;
+	}
+
+	return reset_handler(server, IO_TCP, 1, tcp_master);
 }
 
 static int reconfigure_rate_limits(conf_t *conf, server_t *server)

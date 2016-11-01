@@ -40,6 +40,8 @@
 #include "contrib/sockaddr.h"
 #include "contrib/ucw/mempool.h"
 
+#define PIPE_BUFFER 256
+
 enum handle_type {
 	UNKNOWN = 0,
 	TCP_CLIENT,
@@ -61,6 +63,9 @@ typedef struct loop_ctx {
 	unsigned *iostate;
 	iohandler_t *handler;
 	ifacelist_t* old_ifaces;
+	uv_pipe_t *workers;
+	int workers_count;
+	int round_robin;
 } loop_ctx_t;
 
 typedef struct tcp_ctx {
@@ -114,6 +119,7 @@ static void client_free(void *ctx)
 
 static tcp_client_t *client_alloc(uv_loop_t *loop)
 {
+	log_debug(__func__);
 	knot_mm_t mm_tmp = { 0 };
 	mm_ctx_mempool(&mm_tmp, 16 * MM_DEFAULT_BLKSIZE);
 	tcp_client_t *client = mm_alloc(&mm_tmp, sizeof(tcp_client_t));
@@ -171,12 +177,13 @@ static int server_alloc_listen(tcp_server_t **res, uv_loop_t *loop, iface_t *i)
 	uv_tcp_init_ex(loop, &server->handle, i->addr.ss_family);
 	int fd = -1;
 	uv_fileno((uv_handle_t *)&server->handle, &fd);
-	sockopt_enable(fd, SOL_SOCKET, SO_REUSEPORT);
+	//sockopt_enable(fd, SOL_SOCKET, SO_REUSEPORT);
 
 	char addr_str[SOCKADDR_STRLEN] = {0};
 
 	sockaddr_tostr(addr_str, sizeof(addr_str), (struct sockaddr *)&i->addr);
-	log_debug("open socket, address '%s'", addr_str);
+	server->thread_id = ((loop_ctx_t *) loop->data)->thread_id;
+	log_debug("open socket, address '%s', thread: %d", addr_str, server->thread_id);
 
 
 	uv_tcp_bind(&server->handle, (struct sockaddr *)&i->addr, /* i->addr.ss_family == AF_INET6 ? UV_TCP_IPV6ONLY : */ 0);
@@ -228,7 +235,7 @@ static int generate_answer(tcp_client_t *client, write_ctx_t *write)
 			write->pktsize = htons(write->ans->size);
 			write->tx[1].base = (char *)write->ans->wire;
 			write->tx[1].len = write->ans->size;
-			log_debug("qtype: %u", knot_pkt_qtype(write->ans));
+			log_debug("qtype: %u, fd:%d, thread: %d", knot_pkt_qtype(write->ans), client->param.socket, client->param.thread_id);
 			uv_write(&write->req, (uv_stream_t *)&client->handle, write->tx, 2, on_write);
 			return WRITE;
 		}
@@ -306,6 +313,8 @@ static void on_write (uv_write_t* req, int status)
 {
 	write_ctx_t *write = req->data;
 
+	log_debug("WRITE: sock: %d", write->client->param.socket);
+
 	if (generate_answer(write->client, write) == DONE) {
 		int state;
 		while ((state = client_serve(write->client)) == DONE) {
@@ -326,7 +335,45 @@ static void on_connection(uv_stream_t* server, int status)
 	}
 
 	loop_ctx_t *tcp = server->loop->data;
-	tcp_client_t *client = client_alloc(server->loop);
+
+	/* int max_per_thread = MAX(max_clients / tcp->server->handlers[IO_TCP].size, 1);
+	tcp->clients++;
+	if (tcp->clients >= max_per_thread) {
+
+	}*/
+
+	uv_write_t *req = malloc(sizeof(uv_write_t));
+	uv_buf_t buf = uv_buf_init("_", 1);
+	uv_tcp_t *client = malloc(sizeof(uv_tcp_t));
+	uv_tcp_init(server->loop, client);
+	uv_accept(server, (uv_stream_t *)client);
+
+	log_debug("on connection master, send to: %d", tcp->round_robin);
+
+	uv_write2(req, (uv_stream_t *)&tcp->workers[tcp->round_robin], &buf, 1, (uv_stream_t *)client, NULL /* cb */);
+	tcp->round_robin++;
+	if (tcp->round_robin >= tcp->workers_count) {
+		tcp->round_robin = 0;
+	}
+}
+
+static void on_connection_worker(uv_stream_t *handle, ssize_t nread, const uv_buf_t *buf)
+{
+	uv_pipe_t *pipe = (uv_pipe_t *) handle;
+
+	if (!uv_pipe_pending_count(pipe)) {
+		log_debug("No pending count\n");
+		return;
+	}
+
+	log_debug("on conenction worker");
+
+	uv_handle_type pending = uv_pipe_pending_type(pipe);
+	assert(pending == UV_TCP);
+
+
+	loop_ctx_t *tcp = handle->loop->data;
+	tcp_client_t *client = client_alloc(handle->loop);
 
 	/* Timeout. */
 	rcu_read_lock();
@@ -335,18 +382,12 @@ static void on_connection(uv_stream_t* server, int status)
 	rcu_read_unlock();
 	client->timeout = uv_now(client->handle.loop) + timeout;
 
-	/* int max_per_thread = MAX(max_clients / tcp->server->handlers[IO_TCP].size, 1);
-	tcp->clients++;
-	if (tcp->clients >= max_per_thread) {
-
-	}*/
-
 	/* From libuv documentation:
 	 * When the uv_connection_cb callback is called it is guaranteed
 	 * that this function will complete successfully the first time.
 	 */
-	uv_accept(server, (uv_stream_t*) &client->handle);
-	uv_read_start((uv_stream_t*) &client->handle, read_buffer_alloc, on_read);
+	uv_accept(handle, (uv_stream_t *) &client->handle);
+	uv_read_start((uv_stream_t *) &client->handle, read_buffer_alloc, on_read);
 
 	// Layer param init
 	struct sockaddr_storage *ss = mm_alloc(&client->mm ,sizeof(struct sockaddr_storage));
@@ -360,12 +401,25 @@ static void on_connection(uv_stream_t* server, int status)
 	uv_tcp_getpeername(&client->handle, (struct sockaddr *)ss, &addrlen);
 }
 
+static void pipe_buffer_alloc(uv_handle_t* handle, size_t suggested_size, uv_buf_t* buf)
+{
+	log_debug("pipe_buffer_alloc");
+	buf->base = (char *) handle->data;
+	buf->len = PIPE_BUFFER;
+}
+
 static void on_close_free(uv_handle_t* handle)
 {
-	log_debug("handle_close");
+
 	if (handle->type == UV_TCP) {
+		int fd;
+		uv_fileno(handle, &fd);
+		log_debug("tcp close: %d", fd);
 		tcp_ctx_t *ctx = handle->data;
 		if (ctx != NULL) {
+			if (ctx->type == TCP_CLIENT) {
+				log_debug("client close: %d", ((tcp_client_t *)ctx)->param.socket);
+			}
 			ctx->free(ctx);
 		}
 	}
@@ -493,9 +547,17 @@ int tcp_master(dthread_t *thread)
 	uv_idle_init(&loop, &cancel_point);
 	uv_idle_start(&cancel_point, cancel_check);
 
-	uv_timer_t sweep_timer;
-	uv_timer_init(&loop, &sweep_timer);
-	uv_timer_start(&sweep_timer, tcp_sweep, 0, TCP_SWEEP_INTERVAL * 1000);
+	tcp.workers_count = tcp.server->handlers[IO_TCP_WORKER].size;
+	uv_pipe_t pipes[tcp.workers_count];
+	for(int i = 0; i < tcp.workers_count; ++i) {
+		uv_pipe_init(&loop, &pipes[i], 1);
+		uv_pipe_open(&pipes[i], tcp.server->handlers[IO_TCP_WORKER].handler.pipe[2*i]);
+	}
+	tcp.workers = pipes;
+
+//	uv_timer_t sweep_timer;
+//	uv_timer_init(&loop, &sweep_timer);
+//	uv_timer_start(&sweep_timer, tcp_sweep, 0, TCP_SWEEP_INTERVAL * 1000);
 
 	reconfigure_loop(&loop);
 	*tcp.iostate &= ~ServerReload;
@@ -506,5 +568,59 @@ int tcp_master(dthread_t *thread)
 	uv_loop_close(&loop);
 
 	ref_release(&tcp.old_ifaces->ref);
+	return ret;
+}
+
+int tcp_worker(dthread_t *thread)
+{
+	log_debug("tcp_worker ...");
+
+	if (!thread || !thread->data) {
+		return KNOT_EINVAL;
+	}
+
+	loop_ctx_t tcp;
+	memset(&tcp, 0, sizeof(loop_ctx_t));
+	tcp.handler = (iohandler_t *)thread->data;
+	if (tcp.handler->server == NULL || tcp.handler->server->ifaces == NULL) {
+		return KNOT_EINVAL;
+	}
+
+	tcp.server = tcp.handler->server;
+	tcp.thread_id = tcp.handler->thread_id[dt_get_id(thread)];
+	tcp.thread = thread;
+	tcp.iostate = &tcp.handler->thread_state[dt_get_id(thread)];
+
+	uv_loop_t loop;
+	uv_loop_init(&loop);
+	loop.data = &tcp;
+
+	uv_pipe_t pipe;
+	uv_pipe_init(&loop, &pipe, 1);
+	uv_pipe_open(&pipe, tcp.handler->pipe[2*dt_get_id(thread)+1]);
+	char pipe_buffer[PIPE_BUFFER];
+	pipe.data = pipe_buffer;
+
+	uv_read_start((uv_stream_t *)&pipe, pipe_buffer_alloc, on_connection_worker);
+
+	uv_idle_t cancel_point;
+	uv_idle_init(&loop, &cancel_point);
+	uv_idle_start(&cancel_point, cancel_check);
+
+	uv_timer_t sweep_timer;
+	uv_timer_init(&loop, &sweep_timer);
+	uv_timer_start(&sweep_timer, tcp_sweep, 0, TCP_SWEEP_INTERVAL * 1000);
+
+	*tcp.iostate &= ~ServerReload;
+
+	log_debug("tcp worker start, id: %d, thread: %d", dt_get_id(thread), tcp.thread_id);
+
+	int ret = uv_run(&loop, UV_RUN_DEFAULT);
+	uv_walk(&loop, close_all, NULL);
+	uv_run(&loop, UV_RUN_ONCE);
+	uv_loop_close(&loop);
+
+	ref_release(&tcp.old_ifaces->ref);
+	log_debug("tcp worker stop");
 	return ret;
 }

@@ -50,6 +50,7 @@ typedef struct iohandler {
 	dt_unit_t          *unit;   /*!< Threading unit */
 	unsigned           *thread_state; /*!< Thread state */
 	unsigned           *thread_id; /*!< Thread identifier. */
+	int                *pipe;
 } iohandler_t;
 
 /*! \brief Server state flags.
@@ -74,7 +75,8 @@ typedef struct iface {
 /* Handler indexes. */
 enum {
 	IO_UDP = 0,
-	IO_TCP = 1
+	IO_TCP_WORKER = 1,
+	IO_TCP = 2,
 };
 
 typedef struct ifacelist {
@@ -101,7 +103,7 @@ typedef struct server {
 	struct {
 		unsigned size;
 		iohandler_t handler;
-	} handlers[2];
+	} handlers[3];
 
 	/*! \brief Background jobs. */
 	worker_pool_t *workers;

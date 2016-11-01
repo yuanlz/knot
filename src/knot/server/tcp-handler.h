@@ -58,4 +58,6 @@ int tcp_accept(int fd);
  */
 int tcp_master(dthread_t *thread);
 
+int tcp_worker(dthread_t *thread);
+
 /*! @} */
