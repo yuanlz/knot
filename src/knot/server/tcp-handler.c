@@ -309,7 +309,7 @@ static void on_read(uv_stream_t *handle, ssize_t nread, const uv_buf_t *buf) {
 	}
 }
 
-static void on_write (uv_write_t* req, int status)
+static void on_write(uv_write_t* req, int status)
 {
 	write_ctx_t *write = req->data;
 
@@ -326,6 +326,15 @@ static void on_write (uv_write_t* req, int status)
 			              read_buffer_alloc, on_read);
 		}
 	}
+}
+
+
+
+
+static void on_write_handle(uv_write_t* req, int status)
+{
+	uv_close((uv_handle_t *)req->data, (uv_close_cb)free);
+	free(req);
 }
 
 static void on_connection(uv_stream_t* server, int status)
@@ -345,12 +354,13 @@ static void on_connection(uv_stream_t* server, int status)
 	uv_write_t *req = malloc(sizeof(uv_write_t));
 	uv_buf_t buf = uv_buf_init("_", 1);
 	uv_tcp_t *client = malloc(sizeof(uv_tcp_t));
+	req->data = client;
 	uv_tcp_init(server->loop, client);
 	uv_accept(server, (uv_stream_t *)client);
 
 	log_debug("on connection master, send to: %d", tcp->round_robin);
 
-	uv_write2(req, (uv_stream_t *)&tcp->workers[tcp->round_robin], &buf, 1, (uv_stream_t *)client, NULL /* cb */);
+	uv_write2(req, (uv_stream_t *)&tcp->workers[tcp->round_robin], &buf, 1, (uv_stream_t *)client, on_write_handle);
 	tcp->round_robin++;
 	if (tcp->round_robin >= tcp->workers_count) {
 		tcp->round_robin = 0;
@@ -412,7 +422,7 @@ static void on_close_free(uv_handle_t* handle)
 {
 
 	if (handle->type == UV_TCP) {
-		int fd;
+		int fd = 0;
 		uv_fileno(handle, &fd);
 		log_debug("tcp close: %d", fd);
 		tcp_ctx_t *ctx = handle->data;
@@ -464,6 +474,7 @@ static void reconfigure_loop(uv_loop_t *loop)
 
 	//uv_walk(loop, close_client, NULL);
 	uv_walk(loop, close_tcp , NULL);
+	ref_release(&tcp->old_ifaces->ref);
 	/*if (tcp->old_ifaces != NULL) {
 		WALK_LIST(i, tcp->old_ifaces->u) {
 			uv_walk(loop, close_handle_fd, &i->fd_tcp);
@@ -497,6 +508,25 @@ static void cancel_check(uv_idle_t* handle)
 	if (unlikely(*tcp->iostate & ServerReload)) {
 		*tcp->iostate &= ~ServerReload;
 		reconfigure_loop(handle->loop);
+	}
+}
+
+static void cancel_check_worker(uv_idle_t* handle)
+{
+	loop_ctx_t *tcp = handle->loop->data;
+	dthread_t *thread = tcp->thread;
+	/* Check for cancellation. */
+	if (dt_is_cancelled(thread)) {
+		uv_stop(handle->loop);
+	}
+
+	/* Check handler state. */
+	if (unlikely(*tcp->iostate & ServerReload)) {
+		*tcp->iostate &= ~ServerReload;
+		ref_release(&tcp->old_ifaces->ref);
+		//uv_walk(handle->loop, close_tcp , NULL);
+		/// \TODO Not sure if it is neccessary
+		tcp->old_ifaces  = tcp->handler->server->ifaces;
 	}
 }
 
@@ -591,6 +621,8 @@ int tcp_worker(dthread_t *thread)
 	tcp.thread = thread;
 	tcp.iostate = &tcp.handler->thread_state[dt_get_id(thread)];
 
+	tcp.old_ifaces  = tcp.handler->server->ifaces;
+
 	uv_loop_t loop;
 	uv_loop_init(&loop);
 	loop.data = &tcp;
@@ -605,7 +637,7 @@ int tcp_worker(dthread_t *thread)
 
 	uv_idle_t cancel_point;
 	uv_idle_init(&loop, &cancel_point);
-	uv_idle_start(&cancel_point, cancel_check);
+	uv_idle_start(&cancel_point, cancel_check_worker);
 
 	uv_timer_t sweep_timer;
 	uv_timer_init(&loop, &sweep_timer);
@@ -620,7 +652,6 @@ int tcp_worker(dthread_t *thread)
 	uv_run(&loop, UV_RUN_ONCE);
 	uv_loop_close(&loop);
 
-	ref_release(&tcp.old_ifaces->ref);
 	log_debug("tcp worker stop");
 	return ret;
 }
