@@ -495,7 +495,7 @@ static void reconfigure_loop(uv_loop_t *loop)
 	rcu_read_unlock();
 }
 
-static void cancel_check(uv_idle_t* handle)
+static void cancel_check(uv_idle_t* handle, int signum)
 {
 	loop_ctx_t *tcp = handle->loop->data;
 	dthread_t *thread = tcp->thread;
@@ -511,7 +511,7 @@ static void cancel_check(uv_idle_t* handle)
 	}
 }
 
-static void cancel_check_worker(uv_idle_t* handle)
+static void cancel_check_worker(uv_idle_t* handle, int signum)
 {
 	loop_ctx_t *tcp = handle->loop->data;
 	dthread_t *thread = tcp->thread;
@@ -573,9 +573,13 @@ int tcp_master(dthread_t *thread)
 	uv_loop_init(&loop);
 	loop.data = &tcp;
 
-	uv_idle_t cancel_point;
-	uv_idle_init(&loop, &cancel_point);
-	uv_idle_start(&cancel_point, cancel_check);
+//	uv_idle_t cancel_point;
+//	uv_idle_init(&loop, &cancel_point);
+//	uv_idle_start(&cancel_point, cancel_check);
+
+	uv_signal_t cancel_point;
+	uv_signal_init(&loop, &cancel_point);
+	uv_signal_start(&cancel_point, cancel_check, SIGALRM);
 
 	tcp.workers_count = tcp.server->handlers[IO_TCP_WORKER].size;
 	uv_pipe_t pipes[tcp.workers_count];
@@ -635,9 +639,9 @@ int tcp_worker(dthread_t *thread)
 
 	uv_read_start((uv_stream_t *)&pipe, pipe_buffer_alloc, on_connection_worker);
 
-	uv_idle_t cancel_point;
-	uv_idle_init(&loop, &cancel_point);
-	uv_idle_start(&cancel_point, cancel_check_worker);
+	uv_signal_t cancel_point;
+	uv_signal_init(&loop, &cancel_point);
+	uv_signal_start(&cancel_point, cancel_check_worker, SIGALRM);
 
 	uv_timer_t sweep_timer;
 	uv_timer_init(&loop, &sweep_timer);
