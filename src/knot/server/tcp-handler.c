@@ -119,7 +119,7 @@ static void client_free(void *ctx)
 
 static tcp_client_t *client_alloc(uv_loop_t *loop)
 {
-	log_debug(__func__);
+	log_debug("client_alloc, thread: %d", (loop_ctx_t *) loop->data)->thread_id);
 	knot_mm_t mm_tmp = { 0 };
 	mm_ctx_mempool(&mm_tmp, 16 * MM_DEFAULT_BLKSIZE);
 	tcp_client_t *client = mm_alloc(&mm_tmp, sizeof(tcp_client_t));
@@ -327,9 +327,6 @@ static void on_write(uv_write_t* req, int status)
 		}
 	}
 }
-
-
-
 
 static void on_write_handle(uv_write_t* req, int status)
 {
