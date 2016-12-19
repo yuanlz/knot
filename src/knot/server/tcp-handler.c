@@ -119,7 +119,7 @@ static void client_free(void *ctx)
 
 static tcp_client_t *client_alloc(uv_loop_t *loop)
 {
-	log_debug("client_alloc, thread: %d", (loop_ctx_t *) loop->data)->thread_id);
+	log_debug("client_alloc, thread: %d", ((loop_ctx_t *) loop->data)->thread_id);
 	knot_mm_t mm_tmp = { 0 };
 	mm_ctx_mempool(&mm_tmp, 16 * MM_DEFAULT_BLKSIZE);
 	tcp_client_t *client = mm_alloc(&mm_tmp, sizeof(tcp_client_t));
@@ -492,7 +492,7 @@ static void reconfigure_loop(uv_loop_t *loop)
 	rcu_read_unlock();
 }
 
-static void cancel_check(uv_idle_t* handle, int signum)
+static void cancel_check(uv_signal_t* handle, int signum)
 {
 	loop_ctx_t *tcp = handle->loop->data;
 	dthread_t *thread = tcp->thread;
@@ -508,7 +508,7 @@ static void cancel_check(uv_idle_t* handle, int signum)
 	}
 }
 
-static void cancel_check_worker(uv_idle_t* handle, int signum)
+static void cancel_check_worker(uv_signal_t* handle, int signum)
 {
 	loop_ctx_t *tcp = handle->loop->data;
 	dthread_t *thread = tcp->thread;
