@@ -375,12 +375,16 @@ static void on_write(uv_write_t* req, int status)
 	}
 }
 
+static void on_tmp_client_close(uv_handle_t* handle)
+{
+	free(handle);
+}
+
 static void on_write_handle(uv_write_t* req, int status)
 {
 	
-	uv_close(req->data, NULL);
-	//free(req->data);
-	//free(req);
+	uv_close(req->data, on_tmp_client_close);
+	free(req);
 }
 
 static void on_connection(uv_stream_t* server, int status)
