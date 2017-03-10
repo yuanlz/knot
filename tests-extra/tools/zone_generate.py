@@ -160,6 +160,15 @@ def rnd_dnr():
 def rnd_ip4():
     return '%d.%d.%d.%d' % (rnd(0,255), rnd(0,255), rnd(0,255), rnd(0,255))
 
+def rnd_ip4_dnl():
+    dn = rnd_ip4()
+    fqdn = g_fqdn(dn)
+    while fqdn.lower() in CNAME_EXIST:
+        dn = rnd_ip4()
+        fqdn = g_fqdn(dn)
+    NAME_EXIST.add(fqdn.lower())
+    return dn
+
 def rnd_ip6():
     # Private address range
     addr = 'fd9c:20c0:91fc:cb36'
@@ -279,7 +288,7 @@ def g_spf(rt):
     return '@ IN %s %s' % (g_rtype(rt), rd)
 
 def g_ptr(rt):
-    return '%s %s %s' % (rnd_ip4(), g_rtype(rt), rnd_dname())
+    return '%s %s %s' % (rnd_ip4_dnl(), g_rtype(rt), rnd_dname())
 
 def g_hinfo(rt):
     pf = '%s-%dmhz' % (random.choice(['PC-Intel','ARM','PPC']), rnd(500,700))
@@ -325,8 +334,7 @@ def g_sshfp(rt):
 def g_ipseckey(rt):
     # precedence gw-type algorithm gw pubkey
     # TODO: Doesn't make much sense in non-reverse zones
-    dn = rnd_ip4()
-    NAME_EXIST.add(dn.lower())
+    dn = rnd_ip4_dnl()
     prec = rnd(1,20)
     gwtype = 3 #rnd(1, 3) # TODO: fix, 1,2 needs valid IPs as dnames in zone
     algo = rnd(1, 2)
