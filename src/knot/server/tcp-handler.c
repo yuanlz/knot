@@ -45,49 +45,41 @@
 #include "contrib/time.h"
 #include "contrib/ucw/mempool.h"
 
-/*! \brief TCP context data. */
 typedef struct tcp_context {
-	knot_layer_t layer;              /*!< Query processing layer. */
-	server_t *server;                /*!< Name server structure. */
-	struct iovec iov[2];             /*!< TX/RX buffers. */
-	unsigned client_threshold;       /*!< Index of first TCP client. */
-	struct timespec last_poll_time;  /*!< Time of the last socket poll. */
-	struct timespec throttle_end;    /*!< End of accept() throttling. */
 	fdset_t set;                     /*!< Set of server/client sockets. */
 	unsigned thread_id;              /*!< Thread identifier. */
+	server_t *server;                /*!< Name server structure. */
+	unsigned client_threshold;
+	struct timespec now;
+	int process;
+	int polltime;
 } tcp_context_t;
 
-/*
- * Forward decls.
- */
-#define TCP_THROTTLE_LO 0 /*!< Minimum recovery time on errors. */
-#define TCP_THROTTLE_HI 2 /*!< Maximum recovery time on errors. */
-
-/*! \brief Calculate TCP throttle time (random). */
-static inline int tcp_throttle(void) {
-	return TCP_THROTTLE_LO + (dnssec_random_uint16_t() % TCP_THROTTLE_HI);
-}
-
-/*! \brief Sweep TCP connection. */
-static enum fdset_sweep_state tcp_sweep(fdset_t *set, int i, void *data)
+static inline struct timespec tcp_time(tcp_context_t *ctx)
 {
-	UNUSED(data);
-	assert(set && i < set->n && i >= 0);
-	int fd = set->pfd[i].fd;
-
-	/* Best-effort, name and shame. */
-	struct sockaddr_storage ss;
-	socklen_t len = sizeof(struct sockaddr_storage);
-	if (getpeername(fd, (struct sockaddr*)&ss, &len) == 0) {
-		char addr_str[SOCKADDR_STRLEN] = {0};
-		sockaddr_tostr(addr_str, sizeof(addr_str), (struct sockaddr *)&ss);
-		log_notice("TCP, terminated inactive client, address '%s'", addr_str);
-	}
-
-	close(fd);
-
-	return FDSET_SWEEP;
+	return ctx->now;
 }
+
+enum tcp_client_state {
+	CLIENT_READ,
+	CLIENT_WRITE,
+	CLIENT_PROCESS,
+};
+
+typedef struct tcp_client {
+	tcp_context_t *tcp;
+	enum tcp_client_state state;
+	int fd;
+	knot_layer_t layer;             
+	struct iovec rx;    
+	struct iovec tx;
+	struct process_query_param param;
+	struct sockaddr_storage remote;
+	knot_pkt_t *query;
+	knot_pkt_t *ans;
+	unsigned fdset_pos;
+	knot_mm_t mm;
+} tcp_client_t;
 
 static bool tcp_active_state(int state)
 {
@@ -97,82 +89,6 @@ static bool tcp_active_state(int state)
 static bool tcp_send_state(int state)
 {
 	return (state != KNOT_STATE_FAIL && state != KNOT_STATE_NOOP);
-}
-
-/*!
- * \brief TCP event handler function.
- */
-static int tcp_handle(tcp_context_t *tcp, int fd,
-                      struct iovec *rx, struct iovec *tx)
-{
-	/* Create query processing parameter. */
-	struct sockaddr_storage ss;
-	memset(&ss, 0, sizeof(struct sockaddr_storage));
-	struct process_query_param param = {0};
-	param.socket = fd;
-	param.remote = &ss;
-	param.server = tcp->server;
-	param.thread_id = tcp->thread_id;
-	rx->iov_len = KNOT_WIRE_MAX_PKTSIZE;
-	tx->iov_len = KNOT_WIRE_MAX_PKTSIZE;
-
-	/* Receive peer name. */
-	socklen_t addrlen = sizeof(struct sockaddr_storage);
-	if (getpeername(fd, (struct sockaddr *)&ss, &addrlen) < 0) {
-		;
-	}
-
-	/* Timeout. */
-	rcu_read_lock();
-	int timeout = 1000 * conf()->cache.srv_tcp_reply_timeout;
-	rcu_read_unlock();
-
-	/* Receive data. */
-	int ret = net_dns_tcp_recv(fd, rx->iov_base, rx->iov_len, timeout);
-	if (ret <= 0) {
-		if (ret == KNOT_EAGAIN) {
-			char addr_str[SOCKADDR_STRLEN] = {0};
-			sockaddr_tostr(addr_str, sizeof(addr_str), (struct sockaddr *)&ss);
-			log_warning("TCP, connection timed out, address '%s'",
-			            addr_str);
-		}
-		return KNOT_ECONNREFUSED;
-	} else {
-		rx->iov_len = ret;
-	}
-
-	/* Initialize processing layer. */
-	knot_layer_begin(&tcp->layer, &param);
-
-	/* Create packets. */
-	knot_pkt_t *ans = knot_pkt_new(tx->iov_base, tx->iov_len, tcp->layer.mm);
-	knot_pkt_t *query = knot_pkt_new(rx->iov_base, rx->iov_len, tcp->layer.mm);
-
-	/* Input packet. */
-	(void) knot_pkt_parse(query, 0);
-	knot_layer_consume(&tcp->layer, query);
-
-	/* Resolve until NOOP or finished. */
-	ret = KNOT_EOK;
-	while (tcp_active_state(tcp->layer.state)) {
-		knot_layer_produce(&tcp->layer, ans);
-		/* Send, if response generation passed and wasn't ignored. */
-		if (ans->size > 0 && tcp_send_state(tcp->layer.state)) {
-			if (net_dns_tcp_send(fd, ans->wire, ans->size, timeout) != ans->size) {
-				ret = KNOT_ECONNREFUSED;
-				break;
-			}
-		}
-	}
-
-	/* Reset after processing. */
-	knot_layer_finish(&tcp->layer);
-
-	/* Cleanup. */
-	knot_pkt_free(&query);
-	knot_pkt_free(&ans);
-
-	return ret;
 }
 
 int tcp_accept(int fd)
@@ -198,103 +114,234 @@ int tcp_accept(int fd)
 	return incoming;
 }
 
-static int tcp_event_accept(tcp_context_t *tcp, unsigned i)
+static int client_add(tcp_client_t *client)
 {
-	/* Accept client. */
-	int fd = tcp->set.pfd[i].fd;
-	int client = tcp_accept(fd);
-	if (client >= 0) {
-		/* Assign to fdset. */
-		int next_id = fdset_add(&tcp->set, client, POLLIN, NULL);
-		if (next_id < 0) {
-			close(client);
-			return next_id; /* Contains errno. */
+	int id = fdset_add(&client->tcp->set, client->fd, POLLIN, NULL);
+	if (id < 0) {
+		return id; /* Contains errno. */
+	}
+	client->tcp->set.ctx[id] = client;
+	client->fdset_pos = id;
+
+	rcu_read_lock();
+	int timeout = conf()->cache.srv_tcp_hshake_timeout;
+	fdset_set_watchdog(&client->tcp->set, id, timeout);
+	rcu_read_unlock();
+	return KNOT_EOK;
+}
+
+
+static void client_start(tcp_client_t *client)
+{
+	client->param.socket = client->fd ;
+	client->param.remote = &client->remote;
+	client->param.server = client->tcp->server;
+	client->param.thread_id = client->tcp->thread_id;
+	
+	client->rx.iov_len = KNOT_WIRE_MAX_PKTSIZE;
+	client->tx.iov_len = KNOT_WIRE_MAX_PKTSIZE;
+	client->rx.iov_base = mm_alloc(&client->mm, client->rx.iov_len);
+	client->rx.iov_base = mm_alloc(&client->mm, client->rx.iov_len);
+}
+
+static int tcp_new_client(tcp_context_t *tcp, int fd)
+{
+	int client_fd, ret;
+	client_fd = ret = tcp_accept(fd);
+	if (ret < 0) {
+		return ret;
+	}
+
+	tcp_client_t *client = calloc(1, sizeof(tcp_client_t));
+
+	client->tcp = tcp;
+	client->fd = client_fd;
+
+	ret = client_add(client);
+	if (ret != KNOT_EOK) {
+		close(client->fd);
+		free(client);
+		return ret;
+	}
+
+	mm_ctx_mempool(&client->mm,  16 * MM_DEFAULT_BLKSIZE);
+	knot_layer_init(&client->layer, &client->mm, process_query_layer());
+
+	/* Receive peer name. */
+	socklen_t addrlen = sizeof(struct sockaddr_storage);
+	getpeername(client_fd, (struct sockaddr *)&client->remote, &addrlen);
+
+	client_start(client);
+}
+
+static void client_set_state(tcp_client_t *client, int state)
+{
+	if (client->state == CLIENT_PROCESS) {
+		client->tcp->process--;
+	}
+	switch (state) {
+		case CLIENT_READ:
+			client->tcp->set.pfd[client->fdset_pos].events = POLLIN;
+			break;
+		case CLIENT_WRITE:
+			client->tcp->set.pfd[client->fdset_pos].events = POLLOUT;
+			break;
+		case CLIENT_PROCESS:
+			client->tcp->set.pfd[client->fdset_pos].events = 0;
+			client->tcp->process++;
+			break;
+	}
+	client->state = state;
+}
+
+static void tcp_client_free(tcp_client_t *client)
+{
+	mp_delete(client->mm.ctx);
+	free(client);
+}
+
+static int client_read(tcp_client_t *client)
+{
+	client_start(client);
+	
+	rcu_read_lock();
+	int timeout = 1000 * conf()->cache.srv_tcp_reply_timeout;
+	rcu_read_unlock();
+	int ret = net_dns_tcp_recv(client->fd,
+	                           client->rx.iov_base,
+				   client->rx.iov_len,
+				   timeout);
+	if (ret <= 0) {
+		if (ret == KNOT_EAGAIN) {
+			char addr_str[SOCKADDR_STRLEN] = {0};
+			sockaddr_tostr(addr_str, sizeof(addr_str),
+				(struct sockaddr *)&client->remote);
+			log_warning("TCP, connection timed out, address '%s'",
+			            addr_str);
 		}
-
-		/* Update watchdog timer. */
-		rcu_read_lock();
-		int timeout = conf()->cache.srv_tcp_hshake_timeout;
-		fdset_set_watchdog(&tcp->set, next_id, timeout);
-		rcu_read_unlock();
-
-		return KNOT_EOK;
+		return KNOT_ECONNREFUSED;
+	} else {
+		client->rx.iov_len = ret;
 	}
+	/* Initialize processing layer. */
+	knot_layer_begin(&client->layer, &client->param);
 
-	return client;
+	/* Create packets. */
+	client->query = knot_pkt_new(client->rx.iov_base,
+	                             client->rx.iov_len,
+				     client->layer.mm);
+	client->ans = knot_pkt_new(client->tx.iov_base,
+	                           client->tx.iov_len,
+		                   client->layer.mm);
+	/* Input packet. */
+	(void) knot_pkt_parse(client->query, 0);
+	knot_layer_consume(&client->layer, client->query);
+
+	client_set_state(client, CLIENT_PROCESS);
+
+	return KNOT_EOK;
 }
 
-static int tcp_event_serve(tcp_context_t *tcp, unsigned i)
+static int client_query_finnish(tcp_client_t *client)
 {
-	int fd = tcp->set.pfd[i].fd;
-	int ret = tcp_handle(tcp, fd, &tcp->iov[0], &tcp->iov[1]);
+	/* Reset after processing. */
+	knot_layer_finish(&client->layer);
 
-	/* Flush per-query memory. */
-	mp_flush(tcp->layer.mm->ctx);
+	/* Cleanup. */
+	knot_pkt_free(&client->query);
+	knot_pkt_free(&client->ans);
 
-	if (ret == KNOT_EOK) {
-		/* Update socket activity timer. */
-		rcu_read_lock();
-		int timeout = conf()->cache.srv_tcp_idle_timeout;
-		fdset_set_watchdog(&tcp->set, i, timeout);
-		rcu_read_unlock();
-	}
-
-	return ret;
+	mp_flush(client->layer.mm->ctx);
 }
 
-static int tcp_wait_for_events(tcp_context_t *tcp)
+static void client_process(tcp_client_t *client)
 {
-	/* Wait for events. */
+	while (tcp_active_state(client->layer.state)) {
+		knot_layer_produce(&client->layer, client->ans);
+		/* Send, if response generation passed and wasn't ignored. */
+		if (client->ans->size > 0 && tcp_send_state(client->layer.state)) {
+			client_set_state(client, CLIENT_WRITE);
+			return;
+		}
+	}
+	client_query_finnish(client);
+
+	client_set_state(client, CLIENT_READ);
+}
+
+static int client_write(tcp_client_t *client)
+{
+	rcu_read_lock();
+	int timeout = 1000 * conf()->cache.srv_tcp_reply_timeout;
+	rcu_read_unlock();
+
+	knot_pkt_t *ans = client->ans;
+	assert(ans != NULL);
+
+	if (net_dns_tcp_send(client->fd, ans->wire, ans->size, timeout) != ans->size) {
+		return KNOT_ECONNREFUSED;
+	}
+	client_set_state(client, CLIENT_PROCESS);
+	return KNOT_EOK;
+}
+
+
+
+void tcp_loop(tcp_context_t *tcp)
+{
+	// POLL
+	tcp->now = time_now();
 	fdset_t *set = &tcp->set;
-	int nfds = poll(set->pfd, set->n, TCP_SWEEP_INTERVAL * 1000);
-
-	/* Mark the time of last poll call. */
-	tcp->last_poll_time = time_now();
-	bool is_throttled = (tcp->last_poll_time.tv_sec < tcp->throttle_end.tv_sec);
-	if (!is_throttled) {
-		/* Configuration limit, infer maximal pool size. */
-		rcu_read_lock();
-		int clients = conf()->cache.srv_max_tcp_clients;
-		unsigned max_per_set = MAX(clients / conf_tcp_threads(conf()), 1);
-		rcu_read_unlock();
-		/* Subtract master sockets check limits. */
-		is_throttled = (set->n - tcp->client_threshold) >= max_per_set;
-	}
+	int nfds = poll(set->pfd, set->n, 200) + tcp->process;
 
 	/* Process events. */
 	unsigned i = 0;
-	while (nfds > 0 && i < set->n) {
+	while (i < set->n && nfds > 0) {
 		bool should_close = false;
 		int fd = set->pfd[i].fd;
-		if (set->pfd[i].revents & (POLLERR|POLLHUP|POLLNVAL)) {
+		int revents = set->pfd[i].revents;
+		
+		if (i < tcp->client_threshold) {
+			if (revents & (POLLIN)) {
+				tcp_new_client(tcp, fd);
+				--nfds;
+			}
+			++i;
+			continue;
+		}
+		tcp_client_t *client = set->ctx[i];
+		
+		if (revents & (POLLERR|POLLHUP|POLLNVAL)) {
 			should_close = (i >= tcp->client_threshold);
 			--nfds;
-		} else if (set->pfd[i].revents & (POLLIN)) {
-			/* Master sockets */
-			if (i < tcp->client_threshold) {
-				if (!is_throttled && tcp_event_accept(tcp, i) == KNOT_EBUSY) {
-					tcp->throttle_end = time_now();
-					tcp->throttle_end.tv_sec += tcp_throttle();
-				}
-			/* Client sockets */
-			} else {
-				if (tcp_event_serve(tcp, i) != KNOT_EOK) {
+		}
+		if (revents & (POLLOUT) && client->state == CLIENT_WRITE) {
+			client_write(client);
+			--nfds;
+		}
+		if (revents & (POLLIN)  && client->state == CLIENT_READ) {
+			if (client_read(client) != KNOT_EOK) {
 					should_close = true;
-				}
 			}
 			--nfds;
 		}
 
-		/* Evaluate */
 		if (should_close) {
-			fdset_remove(set, i);
 			close(fd);
-		} else {
-			++i;
+			fdset_remove(set, i);
+			((tcp_client_t *)set->ctx[i])->fdset_pos = i;
+			tcp_client_free(client);
+			continue;
 		}
-	}
+			
+		// PROCESS
+		if (client->state == CLIENT_PROCESS) {
+			client_process(client);
+		}
+		// TRY_WRITE
 
-	return nfds;
+		++i;
+	}
 }
 
 int tcp_master(dthread_t *thread)
@@ -311,42 +358,26 @@ int tcp_master(dthread_t *thread)
 	tcp_context_t tcp;
 	memset(&tcp, 0, sizeof(tcp_context_t));
 
-	/* Create big enough memory cushion. */
-	knot_mm_t mm = { 0 };
-	mm_ctx_mempool(&mm, 16 * MM_DEFAULT_BLKSIZE);
-
-	/* Create TCP answering context. */
 	tcp.server = handler->server;
 	tcp.thread_id = handler->thread_id[dt_get_id(thread)];
-	knot_layer_init(&tcp.layer, &mm, process_query_layer());
 
 	/* Prepare structures for bound sockets. */
 	conf_val_t val = conf_get(conf(), C_SRV, C_LISTEN);
 	fdset_init(&tcp.set, conf_val_count(&val) + CONF_XFERS);
 
-	/* Create iovec abstraction. */
-	for (unsigned i = 0; i < 2; ++i) {
-		tcp.iov[i].iov_len = KNOT_WIRE_MAX_PKTSIZE;
-		tcp.iov[i].iov_base = malloc(tcp.iov[i].iov_len);
-		if (tcp.iov[i].iov_base == NULL) {
-			ret = KNOT_ENOMEM;
-			goto finish;
-		}
-	}
-
-	/* Initialize sweep interval. */
-	struct timespec next_sweep = time_now();
-	next_sweep.tv_sec += TCP_SWEEP_INTERVAL;
-
 	for(;;) {
-
 		/* Check handler state. */
 		if (unlikely(*iostate & ServerReload)) {
 			*iostate &= ~ServerReload;
 
 			/* Cancel client connections. */
 			for (unsigned i = tcp.client_threshold; i < tcp.set.n; ++i) {
+				tcp_client_t *client = tcp.set.ctx[i];
+				if (client->state != CLIENT_READ) {
+					client_query_finnish(client);
+				}
 				close(tcp.set.pfd[i].fd);
+				tcp_client_free(client);
 			}
 
 			ref_release(ref);
@@ -363,21 +394,18 @@ int tcp_master(dthread_t *thread)
 			break;
 		}
 
-		/* Serve client requests. */
-		tcp_wait_for_events(&tcp);
-
-		/* Sweep inactive clients. */
-		if (tcp.last_poll_time.tv_sec >= next_sweep.tv_sec) {
-			fdset_sweep(&tcp.set, &tcp_sweep, NULL);
-			next_sweep = time_now();
-			next_sweep.tv_sec += TCP_SWEEP_INTERVAL;
-		}
+		tcp_loop(&tcp);
 	}
 
-finish:
-	free(tcp.iov[0].iov_base);
-	free(tcp.iov[1].iov_base);
-	mp_delete(mm.ctx);
+	
+	for (unsigned i = tcp.client_threshold; i < tcp.set.n; ++i) {
+				tcp_client_t *client = tcp.set.ctx[i];
+				if (client->state != CLIENT_READ) {
+					client_query_finnish(client);
+				}		
+		close(tcp.set.pfd[i].fd);
+		tcp_client_free(tcp.set.ctx[i]);
+	}
 	fdset_clear(&tcp.set);
 	ref_release(ref);
 
