@@ -292,7 +292,8 @@ void tcp_loop(tcp_context_t *tcp)
 	// POLL
 	tcp->now = time_now();
 	fdset_t *set = &tcp->set;
-	int nfds = poll(set->pfd, set->n, 200) + tcp->process;
+	int nfds = poll(set->pfd, set->n,tcp->process > 0 ? 0 : TCP_SWEEP_INTERVAL * 1000)
+	 + tcp->process;
 
 	/* Process events. */
 	unsigned i = 0;
@@ -316,7 +317,7 @@ void tcp_loop(tcp_context_t *tcp)
 			--nfds;
 		}
 		if (revents & (POLLOUT) && client->state == CLIENT_WRITE) {
-			client_write(client);
+			should_close = client_write(client) != KNOT_EOK;
 			--nfds;
 		}
 		if (revents & (POLLIN)  && client->state == CLIENT_READ) {
@@ -326,6 +327,16 @@ void tcp_loop(tcp_context_t *tcp)
 			--nfds;
 		}
 
+		// PROCESS
+		if (client->state == CLIENT_PROCESS) {
+			client_process(client);
+			if (client->state == CLIENT_WRITE && client->ans->size < 512) {
+				// TRY_WRITE
+				should_close = client_write(client) != KNOT_EOK;
+			}
+		}
+
+
 		if (should_close) {
 			close(fd);
 			fdset_remove(set, i);
@@ -333,12 +344,7 @@ void tcp_loop(tcp_context_t *tcp)
 			tcp_client_free(client);
 			continue;
 		}
-			
-		// PROCESS
-		if (client->state == CLIENT_PROCESS) {
-			client_process(client);
-		}
-		// TRY_WRITE
+		
 
 		++i;
 	}
