@@ -96,14 +96,26 @@ for i, word in enumerate(WORDS):
         size = random.randint(2, 20)
         WORDS[i] = ''.join(random.choice(string.hexdigits) for _ in range(size))
 
-# For unique CNAMES/DNAMES
+# For unique CNAMES
 CNAME_EXIST = set([])
 # For unique names
 NAME_EXIST = set([])
+# For unique DNAMES
+DNAME_EXIST = set([])
 
 # For A/AAAA names
 A_NAMES = []
 AAAA_NAMES = []
+
+# Ensure owner isn't DNAME's subdomain
+def is_sub_dname(dname):
+    names = dname.split('.', 1)
+    while len(names) > 1:
+        name = names[1]
+        if name in DNAME_EXIST:
+            return True
+        names = name.split('.', 1)
+    return False
 
 # Generate random number
 def rnd(a, b):
@@ -139,7 +151,7 @@ def rnd_dname(enable_sub = 1):
 def rnd_dnl(enable_sub = 1):
     dn = rnd_dname(enable_sub)
     fqdn = g_fqdn(dn)
-    while fqdn.lower() in CNAME_EXIST:
+    while fqdn.lower() in CNAME_EXIST or is_sub_dname(fqdn.lower()):
         dn = rnd_dname(enable_sub)
         fqdn = g_fqdn(dn)
     NAME_EXIST.add(fqdn.lower())
@@ -163,7 +175,7 @@ def rnd_ip4():
 def rnd_ip4_dnl():
     dn = rnd_ip4()
     fqdn = g_fqdn(dn)
-    while fqdn.lower() in CNAME_EXIST:
+    while fqdn.lower() in CNAME_EXIST or is_sub_dname(fqdn.lower()):
         dn = rnd_ip4()
         fqdn = g_fqdn(dn)
     NAME_EXIST.add(fqdn.lower())
@@ -249,15 +261,17 @@ def g_srv(rt):
     name = '_%s._%s.%s' % (rnd_srv(), rnd_proto(), rnd_dnl())
     rdt = g_rdata(rt, '%d %d %d %s' % (rnd(1, 50), rnd(1, 50), rnd(1024, 65535), rnd_dnr()))
     return '%s %s %s' % (name, g_rtype(rt), rdt)
-
 def g_dname(rt):
     # Ensure unique owners for CNAME/DNAME
     dn = rnd_dname()
     fqdn = g_fqdn(dn)
     while (fqdn.lower() in CNAME_EXIST) or \
-          (fqdn.lower() in NAME_EXIST):
+          (fqdn.lower() in NAME_EXIST) or \
+          is_sub_dname(fqdn.lower()):
         dn = rnd_dname()
         fqdn = g_fqdn(dn)
+    if rt[0] is 'DNAME':
+        DNAME_EXIST.add(fqdn.lower())
     CNAME_EXIST.add(fqdn.lower())
     # Value (domain-name)
     rd = rnd_dnr()
@@ -437,6 +451,33 @@ def g_unique_names(count):
     else:
         return o
 
+def add_term_dot(string):
+    if string[-1] != ".":
+        return string + "."
+    return string
+
+def load_lists(FILE):
+    pcname = re.compile("^[\S]*( [\S]*)?( [\S]*)? CNAME [\S]*")
+    pdname = re.compile("^[\S]*( [\S]*)?( [\S]*)? DNAME [\S]*")
+    for line in FILE:
+        if line[0] != ';':
+            found = pcname.match(line)
+            if found:
+                words = found.group().split()
+                dname = add_term_dot(words[0])
+                dest = add_term_dot(words[-1])
+                CNAME_EXIST.add(dname.lower())
+                CNAME_EXIST.add(dest.lower())
+            found = pdname.match(line)
+            if found:
+                words = found.group().split()
+                dname = add_term_dot(words[0])
+                dest = add_term_dot(words[-1])
+                DNAME_EXIST.add(dname.lower())
+                CNAME_EXIST.add(dname.lower())
+                CNAME_EXIST.add(dest.lower())
+
+
 def main(args):
     global ORIGIN
     global SERIAL
@@ -523,9 +564,16 @@ def main(args):
     if UPDATE:
         shutil.copyfile(UPDATE, in_fname)
 
-        # Disable additional CNAME generation
+        # Restore dname lists - relevant only if running update with different process
+        # TODO: All dnames - need for propper parser, dnspython fails with unsuported rrtypes
+        file = open(in_fname)
+        load_lists(file)
+        file.close()
+        # Disable additional CNAME and DNAME generation (until parsing is resolved)
         for idx, val in enumerate(RRTYPES):
             if val[0] == 'CNAME':
+                RRTYPES[idx][2] = 0
+            elif val[0] == 'DNAME':
                 RRTYPES[idx][2] = 0
 
     outf = open(in_fname, "a")
