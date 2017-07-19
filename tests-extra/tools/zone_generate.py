@@ -28,6 +28,8 @@ import dns
 import dns.rdataclass
 import dns.rdatatype
 import dns.rdata
+import dns.zone
+from dns.rdatatype import *
 
 # Word databases
 ORIGIN = '' # Zone origin (default=com)
@@ -330,7 +332,7 @@ def g_cert(rt):
     # TODO: dnssec-keygen generated values (slow?)
     # TODO: values from book Pro DNS and BIND 10
     rd = g_rdata(rt, '%d 12179 3 %s' % \
-           (rnd(1,8), 'VGhpcyBzaG9ydCBzbmlwcGV0IG9mIHRleHQgaXMgc2FkIGFuZCBtZWFuaW5nbGVzcy4K'))
+           (rnd(1,3), 'VGhpcyBzaG9ydCBzbmlwcGV0IG9mIHRleHQgaXMgc2FkIGFuZCBtZWFuaW5nbGVzcy4K'))
     return '%s %s %s' % (rnd_dnl(), g_rtype(rt), rd)
 
 def g_key(rt):
@@ -456,7 +458,24 @@ def add_term_dot(string):
         return string + "."
     return string
 
-def load_lists(FILE):
+# Complete list reload, alows CNAME and DNAME generating
+def load_lists_propper(FILE):
+    zone = dns.zone.from_file(in_fname, ORIGIN)
+    for name, node in zone.nodes.items():
+        rdatasets = node.rdatasets
+        print(name)
+        NAME_EXIST.add(name)
+        for rdataset in rdatasets:
+            if rdataset.rdtype == CNAME:
+               CNAME_EXIST.add(name)
+            elif rdataset.rdtype == DNAME:
+               CNAME_EXIST.add(name)
+               DNAME_EXIST.add(name)
+
+# Basic regex zone parsing to extract CNAMEs and DNAMEs
+# Not good enought to enable updating with new CNAMEs and DNAMEs
+def load_lists_basic(FILE):
+    file = open(in_fname)
     pcname = re.compile("^[\S]*( [\S]*)?( [\S]*)? CNAME [\S]*")
     pdname = re.compile("^[\S]*( [\S]*)?( [\S]*)? DNAME [\S]*")
     for line in FILE:
@@ -476,6 +495,7 @@ def load_lists(FILE):
                 DNAME_EXIST.add(dname.lower())
                 CNAME_EXIST.add(dname.lower())
                 CNAME_EXIST.add(dest.lower())
+    file.close()
 
 
 def main(args):
@@ -565,16 +585,16 @@ def main(args):
         shutil.copyfile(UPDATE, in_fname)
 
         # Restore dname lists - relevant only if running update with different process
-        # TODO: All dnames - need for propper parser, dnspython fails with unsuported rrtypes
-        file = open(in_fname)
-        load_lists(file)
-        file.close()
-        # Disable additional CNAME and DNAME generation (until parsing is resolved)
-        for idx, val in enumerate(RRTYPES):
-            if val[0] == 'CNAME':
-                RRTYPES[idx][2] = 0
-            elif val[0] == 'DNAME':
-                RRTYPES[idx][2] = 0
+        # If dnspython parsing fails, generating CNAMEs and DNAMEs has to be restricted
+        ret = load_lists_propper(in_fname)
+        if ret != 0:
+            load_lists_basic(in_fname)
+            # Disable additional CNAME and DNAME generation
+            for idx, val in enumerate(RRTYPES):
+                if val[0] == 'CNAME':
+                    RRTYPES[idx][2] = 0
+                elif val[0] == 'DNAME':
+                    RRTYPES[idx][2] = 0
 
     outf = open(in_fname, "a")
 
