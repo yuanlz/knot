@@ -460,25 +460,64 @@ def add_term_dot(string):
 
 # Complete list reload, alows CNAME and DNAME generating
 def load_lists_propper(FILE):
-    zone = dns.zone.from_file(in_fname, ORIGIN)
-    for name, node in zone.nodes.items():
-        rdatasets = node.rdatasets
-        print(name)
-        NAME_EXIST.add(name)
-        for rdataset in rdatasets:
-            if rdataset.rdtype == CNAME:
-               CNAME_EXIST.add(name)
-            elif rdataset.rdtype == DNAME:
-               CNAME_EXIST.add(name)
-               DNAME_EXIST.add(name)
+    try:
+        orig = dns.name.from_text(ORIGIN)
+        zone = dns.zone.from_file(FILE, ORIGIN)
+        for name, node in zone.nodes.items():
+            rdatasets = node.rdatasets
+            # rdataset owner append origin
+            if name.is_subdomain(orig):
+                dname = name.to_text().lower()
+            else:
+                dname = name.derelativize(orig).to_text().lower()
+
+            for rdataset in rdatasets:
+                if dname is not add_term_dot('@.{}'.format(ORIGIN)):
+                    # add owner to correct list
+                    if rdataset.rdtype == CNAME:
+                        CNAME_EXIST.add(dname)
+                    elif rdataset.rdtype == DNAME:
+                        CNAME_EXIST.add(dname)
+                        DNAME_EXIST.add(dname)
+                    # remove services and protocols from SRV
+                    elif rdataset.rdtype == SRV:
+                        NAME_EXIST.add(dname.split(".", 2)[2])
+                    else:
+                        NAME_EXIST.add(dname)
+                # Add target dnames if exist
+                for rdata in rdataset:
+                    # NS like records
+                    if isinstance(rdata, dns.rdtypes.nsbase.NSBase):
+                        # target append origin
+                        if rdata.target.is_subdomain(orig):
+                            dname = rdata.target.to_text().lower()
+                        else:
+                            dname = rdata.target.derelativize(orig).to_text().lower()
+                        # add target to correct set
+                        if rdataset.rdtype == CNAME:
+                            CNAME_EXIST.add(dname)
+                        elif rdataset.rdtype == DNAME:
+                            CNAME_EXIST.add(dname)
+                            DNAME_EXIST.add(dname)
+                        else:
+                            NAME_EXISTS.add(dname)
+                    # IPSECKEY DNAME
+                    elif rdataset.rdtype == IPSECKEY:
+                        if rdata.gateway_type is 3:
+                            dname = rdata.gateway.derelativize(orig).to_text().lower()
+                            NAME_EXIST.add(dname)
+
+        return 0
+    except Exception as e:
+        return 1
 
 # Basic regex zone parsing to extract CNAMEs and DNAMEs
 # Not good enought to enable updating with new CNAMEs and DNAMEs
 def load_lists_basic(FILE):
-    file = open(in_fname)
+    file = open(FILE)
     pcname = re.compile("^[\S]*( [\S]*)?( [\S]*)? CNAME [\S]*")
     pdname = re.compile("^[\S]*( [\S]*)?( [\S]*)? DNAME [\S]*")
-    for line in FILE:
+    for line in file:
         if line[0] != ';':
             found = pcname.match(line)
             if found:
