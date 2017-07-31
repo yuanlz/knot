@@ -86,7 +86,10 @@ libcontrib_la_SOURCES = 			\
 	contrib/ucw/lists.c			\
 	contrib/ucw/lists.h			\
 	contrib/ucw/mempool.c			\
-	contrib/ucw/mempool.h
+	contrib/ucw/mempool.h			\
+	contrib/rpmalloc/malloc.c		\
+	contrib/rpmalloc/rpmalloc.c		\
+	contrib/rpmalloc/rpmalloc.h
 
 if !HAVE_LMDB
 libcontrib_la_SOURCES +=			\
