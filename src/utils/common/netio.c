@@ -259,6 +259,35 @@ static int fastopen_send(int sockfd, const struct msghdr *msg, int timeout)
 #endif
 }
 
+/**
+ * Sends data with TCP Fast Open - multiple.
+ */
+static int fastopen_send_multiple(int sockfd, struct mmsghdr *msg, int count, int timeout)
+{
+#if __APPLE__
+	return sendmmsg(sockfd, msg, count, 0);
+#elif defined(MSG_FASTOPEN)
+	int ret = sendmmsg(sockfd, msg, count, MSG_FASTOPEN);
+	if (ret == -1 && errno == EINPROGRESS) {
+		struct pollfd pfd = {
+			.fd = sockfd,
+			.events = POLLOUT,
+			.revents = 0,
+		};
+		if (poll(&pfd, 1, 1000 * timeout) != 1) {
+			errno = ETIMEDOUT;
+			return -1;
+		}
+		ret = sendmmsg(sockfd, msg, count, 0);
+	}
+	return ret;
+#else
+	errno = ENOTSUP;
+	return -1;
+#endif
+}
+
+
 int net_connect(net_t *net)
 {
 	if (net == NULL || net->srv == NULL) {
@@ -445,6 +474,63 @@ int net_send(net_t *net, const uint8_t *buf, const size_t buf_len)
 		}
 		if (ret != total) {
 			WARN("can't send query to %s\n", net->remote_str);
+			return KNOT_NET_ESEND;
+		}
+	}
+
+	return KNOT_EOK;
+}
+
+int net_send_multiple(net_t *net, uint8_t * const *buf, const size_t *buf_len, int count)
+{
+	int ret;
+	if (net == NULL || buf == NULL) {
+		DBG_NULL;
+		return KNOT_EINVAL;
+	}
+	if (net->tls.params != NULL) {
+		for (int i = 0; i < count; i++) {
+			ret = tls_ctx_send((tls_ctx_t *)&net->tls, buf[i], buf_len[i]);
+			if (ret != KNOT_EOK) {
+				WARN("can't send query to %s\n", net->remote_str);
+				return KNOT_NET_ESEND;
+			}
+		}
+	// Send data over TCP.
+	} else {
+		bool fastopen = net->flags & NET_FLAGS_FASTOPEN;
+		bool fastopen_connected = net->flags & NET_FLAGS_FASTOPEN_CONNECTED;
+		struct mmsghdr msg[count];
+		struct iovec iov[count][2];
+		uint16_t pktsize[count];
+		ssize_t total = 0;
+		for (int i = 0; i < count; i++) {
+			// Leading packet length bytes.
+			pktsize[i] = htons(buf_len[i]);
+
+			iov[i][0].iov_base = &pktsize[i];
+			iov[i][0].iov_len = sizeof(pktsize[i]);
+			iov[i][1].iov_base = (uint8_t *)buf[i];
+			iov[i][1].iov_len = buf_len[i];
+
+			// Compute packet total length.
+			total += iov[i][0].iov_len + iov[i][1].iov_len;
+
+			msg[i].msg_hdr.msg_iov = iov[i];
+			msg[i].msg_hdr.msg_iovlen = sizeof(iov[i]) / sizeof(*iov[i]);
+			msg[i].msg_hdr.msg_name = net->srv->ai_addr;
+			msg[i].msg_hdr.msg_namelen = net->srv->ai_addrlen;
+		}
+
+		int ret = 0;
+		if (fastopen && !fastopen_connected) {
+			ret = fastopen_send_multiple(net->sockfd, msg, count, net->wait);
+			net->flags |= NET_FLAGS_FASTOPEN_CONNECTED;
+		} else {
+			ret = sendmmsg(net->sockfd, msg, count, 0);
+		}
+		if (ret != total) {
+			WARN("can't send queries to %s\n", net->remote_str);
 			return KNOT_NET_ESEND;
 		}
 	}
