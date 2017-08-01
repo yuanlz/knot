@@ -118,6 +118,7 @@ struct query {
 	bool		nsid;
 	/*!< Keepopen */
 	bool		keepopen;
+	bool		pipeline;
 	/*!< EDNS version (8unsigned + -1 uninitialized). */
 	int16_t		edns;
 	/*!< Transaction signature. */

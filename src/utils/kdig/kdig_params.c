@@ -963,6 +963,16 @@ static int opt_keepopen(const char *arg, void *query)
 	query_t *q = query;
 
 	q->keepopen = true;
+	if (arg != NULL) {
+		if (strcmp(arg, "yes") == 0) {
+			q->pipeline = true;
+		} else if (strcmp(arg, "no") == 0) {
+			q->pipeline = false;
+		} else {
+			ERR("invalid +keepopen=%s\n", arg);
+			return KNOT_EINVAL;
+		}
+	}
 
 	return KNOT_EOK;
 }
@@ -972,6 +982,7 @@ static int opt_nokeepopen(const char *arg, void *query)
 	query_t *q = query;
 
 	q->keepopen = false;
+	q->pipeline = false;
 
 	return KNOT_EOK;
 }
@@ -1101,7 +1112,7 @@ static const param_t kdig_opts2[] = {
 	{ "retry",          ARG_REQUIRED, opt_retry },
 	{ "noretry",        ARG_NONE,     opt_noretry },
 
-	{ "keepopen",	    ARG_NONE, opt_keepopen},
+	{ "keepopen",	    ARG_OPTIONAL, opt_keepopen},
 	{ "nokeepopen",	    ARG_NONE, opt_nokeepopen},
 
 	/* "idn" doesn't work since it must be called before query creation. */
@@ -1152,6 +1163,7 @@ query_t *query_create(const char *owner, const query_t *conf)
 		query->style = DEFAULT_STYLE_DIG;
 		query->idn = true;
 		query->nsid = false;
+		query->keepopen = false;
 		query->keepopen = false;
 		query->edns = -1;
 		query->padding = -1;
