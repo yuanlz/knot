@@ -644,26 +644,35 @@ static int process_query_packet(knot_pkt_t      * const *queries,
 				const sign_context_t  *sign_ctx,
 				int count,
                                 net_t                 *net,
-                                const list_t         *queries_ctx)
+                                const query_t        *queries_ctx)
 {
-/*	struct timespec	t_start, t_query, t_end;
-	knot_pkt_t	*reply;
-	uint8_t		in[MAX_PACKET_SIZE];
-	int		in_len;
-	int		ret;
+	struct timespec	t_start, t_query;//, t_end;
+	//knot_pkt_t	*reply;
+	//uint8_t		in[MAX_PACKET_SIZE];
+	//int		in_len;
+	int		ret = 0;
+
+	uint8_t **buffer = calloc(count, sizeof(*buffer));
+	size_t buf_lens[count]; 
+
+	for (int i = 0; i < count; i++) {
+		buffer[i] = queries[i]->wire;
+		buf_lens[i] = queries[i]->size;
+	}
 
 	// Get start query time.
 	t_start = time_now();
 
 	// Send query packet.
-	ret = net_send(net, query->wire, query->size);
+	ret = net_send_multiple(net, buffer, buf_lens, count);
 	if (ret != KNOT_EOK) {
-		return -1;
+		ret = -1;
+		goto failed_process_query_packet;
 	}
 
 	// Get stop query time and start reply time.
 	t_query = time_now();
-
+/*
 #if USE_DNSTAP
 	// Make the dnstap copy of the query.
 	write_dnstap(query_ctx->dt_writer, true, query->wire, query->size,
@@ -773,7 +782,9 @@ static int process_query_packet(knot_pkt_t      * const *queries,
 
 	knot_pkt_free(&reply);
 */
-	return 0;
+failed_process_query_packet:
+	free(buffer);
+	return ret;
 }
 /*
 static int process_xfr_packet(const knot_pkt_t      *query,
@@ -1149,32 +1160,29 @@ static void process_operation(const query_t *query)
 	knot_pkt_free(&out_packet);
 }
 */
-static int queries_send(const list_t *queries, srv_info_t *remote, net_t *net, int socktype)
+static int queries_send(query_t **queries, int count, srv_info_t *remote, net_t *net, int socktype)
 {
-	if (EMPTY_LIST(*queries)) {
+	if (queries == NULL || count <= 0) {
 		DBG_NULL;
 		return KNOT_EINVAL;
 	}
 
-	int ret, counter = 0;
-	int count = list_size(queries);
-	knot_pkt_t **out_packet = malloc(sizeof(*out_packet)*count);
-	sign_context_t *sign_ctx = malloc(sizeof(*sign_ctx)*count);
-	query_t *query = (query_t *) HEAD(*queries);
-	node_t *n = NULL;
+	int ret;
+	knot_pkt_t **out_packet = calloc(count, sizeof(*out_packet));
+	sign_context_t *sign_ctx = calloc(count, sizeof(*sign_ctx));
+	const query_t *query = queries[0];
 
-	WALK_LIST(n, *queries) {
-		query_t *qry = (query_t *) n;
+	for (int i = 0; i < count; i++) {
 		// Create query packet.
-		out_packet[counter] = create_query_packet(qry);
-		if (out_packet[counter] == NULL) {
+		out_packet[i] = create_query_packet(queries[i]);
+		if (out_packet[i] == NULL) {
 			ERR("can't create query packet\n");
 			ret = KNOT_ENOMEM;
 			goto finish_queries_send;
 		}
 
 		// Sign the query.
-		ret = sign_query(out_packet[counter], qry, &sign_ctx[counter]);
+		ret = sign_query(out_packet[i], queries[i], &sign_ctx[i]);
 		if (ret != KNOT_EOK) {
 			ERR("can't sign the packet (%s)\n", knot_strerror(ret));
 			goto finish_queries_send;
@@ -1183,7 +1191,7 @@ static int queries_send(const list_t *queries, srv_info_t *remote, net_t *net, i
 
 	for (size_t i = 0; i <= query->retries; i++) {
 		//if (query->operation == OPERATION_QUERY) { // OBSOLETE - DECIDE ON LOWER LEVEL
-		ret = process_query_packet(out_packet, sign_ctx, count, net, queries);
+		ret = process_query_packet(out_packet, sign_ctx, count, net, queries[0]);
 		/*} else {
 			ret = process_xfr_packet(out_packet, net, query,
 						 &sign_ctx, &query->style);
@@ -1229,8 +1237,8 @@ static int queries_send(const list_t *queries, srv_info_t *remote, net_t *net, i
 	}
 finish_queries_send:
 	for (int i = 0; i < count; i++) {
-		sign_context_deinit(&sign_ctx[i]);
-		knot_pkt_free(&out_packet[i]);
+		sign_context_deinit(&(sign_ctx[i]));
+		knot_pkt_free(&(out_packet[i]));
 	}
 
 	free(sign_ctx);
@@ -1240,12 +1248,17 @@ finish_queries_send:
 }
 
 
-static void process_pipeline(const list_t *pipeline)
+static void process_pipeline(query_t **pipeline, int count)
 {
 	node_t     *server = NULL;
 	net_t      *net_ptr = NULL;
 	int ret = KNOT_EOK;
-	query_t *query = (query_t *) HEAD(*pipeline);
+
+	if (count <= 0) {
+		return;
+	}
+
+	query_t *query = pipeline[0];
 	int iptype = get_iptype(query->ip);
 	int socktype = get_socktype(query->protocol, query->type_num);
 	int flags = net_flags(query);
@@ -1279,7 +1292,7 @@ static void process_pipeline(const list_t *pipeline)
 			     net_ptr? net_ptr->remote->service : remote->service,
 			     get_sockname(socktype));
 
-			ret = queries_send(pipeline, remote, net_ptr, socktype);
+			ret = queries_send(pipeline, count, remote, net_ptr, socktype);
 			if (ret == KNOT_EOK) {
 				return;
 			}
@@ -1301,60 +1314,67 @@ failed_process_pipeline:
 	}
 }
 
-void process_pipelines(list_t *pipelines)
+void process_pipelines(query_t **pipelines, int count)
 {
-	list_t pipeline = { 0 };
-	const srv_info_t *pipeserver = NULL;
+	query_t **pipeline = calloc(count, sizeof(*pipeline));
+	int subc = 0;
 
-	node_t *n = NULL;
-	while (!EMPTY_LIST(*pipelines)) {
-		init_list(&pipeline);
-		WALK_LIST(n, *pipelines) {
-			query_t *query = (query_t *) n;
-			query_t *qhead = (query_t *) HEAD(pipeline);
-
-			if (EMPTY_LIST(pipeline)) {
-				rem_node(n);
-				add_tail(&pipeline, n);
-				pipeserver = HEAD(query->servers);
+	while (count > 0) {
+		for (int i = 0; i < count; i++) {
+			if (subc == 0) {
+				pipeline[subc] = pipelines[i];
+				pipelines[i] = pipelines[count -1];
+				subc++;
+				count--;
+				i--;
 				continue;
 			}
 
-			int ipt = get_iptype(query->ip);
-			int st = get_socktype(query->protocol, query->type_num);
-
-			int headipt = get_iptype(qhead->ip);
-			int headst = get_socktype(qhead->protocol, qhead->type_num);
-
-			if (ipt == headipt && st == headst && servers_match(HEAD(query->servers), pipeserver)) {
-				rem_node(n);
-				add_tail(&pipeline, n);
+			int iptype = get_iptype(pipelines[i]->ip);
+			int iptypeh = get_iptype(pipeline[0]->ip);
+			int socktype = get_socktype(pipelines[i]->protocol, pipelines[i]->type_num);
+			int socktypeh = get_socktype(pipeline[0]->protocol, pipeline[0]->type_num);
+			srv_info_t *server = HEAD(pipelines[i]->servers);
+			srv_info_t *serverh = HEAD(pipeline[0]->servers);
+			
+			if (iptype == iptypeh && socktype == socktypeh &&
+				servers_match(server, serverh)) {
+				pipeline[subc] = pipelines[i];
+				pipelines[i] = pipelines[count -1];
+				subc++;
+				count--;
+				i--;
 			}
 		}
-
-		process_pipeline(&pipeline);
-		pipeserver = NULL;
+		process_pipeline(pipeline, subc);
+		subc = 0;
 	}
+	free(pipeline);
 }
 
 int kdig_exec(const kdig_params_t *params)
 {
 	node_t *n = NULL;
-	list_t pipelines = { 0 };
+	query_t **queries = NULL;
 
 	if (params == NULL) {
 		DBG_NULL;
 		return KNOT_EINVAL;
 	}
 
+	queries = calloc(list_size(&params->queries), sizeof(*queries));
+	if (queries == NULL) {
+		return KNOT_ENOMEM;
+	}
 	init_list(&connections);
-	init_list(&pipelines);
 
 	// Loop over query list.
+	int count = 0;
 	WALK_LIST(n, params->queries) {
 		query_t *query = (query_t *)n;
 		if (query->pipeline && query->keepopen) {
-			add_tail(&pipelines, n);
+			queries[count] = query;
+			count++;
 			continue;
 		}
 /*
@@ -1376,12 +1396,12 @@ int kdig_exec(const kdig_params_t *params)
 		}
 */
 		// If not last query, print separation.
-		if (n->next->next && params->config->style.format == FORMAT_FULL) {
+		if (n->next->next && params->config->style.format == FORMAT_FULL && !query->keepopen) {
 			printf("\n");
 		}
 	}
 
-	process_pipelines(&pipelines);
+	process_pipelines(queries, count);
 
 	net_t *net, *next;
 	WALK_LIST_DELSAFE(net, next, connections) {
@@ -1391,6 +1411,8 @@ int kdig_exec(const kdig_params_t *params)
 		net_clean(net);
 		free(net);
 	}
+
+	free(queries);
 
 	return KNOT_EOK;
 }

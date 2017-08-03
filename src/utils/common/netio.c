@@ -503,23 +503,21 @@ int net_send_multiple(net_t *net, uint8_t * const *buf, const size_t *buf_len, i
 		struct mmsghdr msg[count];
 		struct iovec iov[count][2];
 		uint16_t pktsize[count];
-		ssize_t total = 0;
 		for (int i = 0; i < count; i++) {
 			// Leading packet length bytes.
 			pktsize[i] = htons(buf_len[i]);
 
-			iov[i][0].iov_base = &pktsize[i];
+			iov[i][0].iov_base = &(pktsize[i]);
 			iov[i][0].iov_len = sizeof(pktsize[i]);
 			iov[i][1].iov_base = (uint8_t *)buf[i];
 			iov[i][1].iov_len = buf_len[i];
 
-			// Compute packet total length.
-			total += iov[i][0].iov_len + iov[i][1].iov_len;
-
 			msg[i].msg_hdr.msg_iov = iov[i];
-			msg[i].msg_hdr.msg_iovlen = sizeof(iov[i]) / sizeof(*iov[i]);
+			msg[i].msg_hdr.msg_iovlen = sizeof(iov[i]) / sizeof(*iov[i]);;
 			msg[i].msg_hdr.msg_name = net->srv->ai_addr;
 			msg[i].msg_hdr.msg_namelen = net->srv->ai_addrlen;
+			//msg[i].msg_hdr.msg_control = NULL;
+			//msg[i].msg_hdr.msg_controllen = 0;
 		}
 
 		int ret = 0;
@@ -529,8 +527,8 @@ int net_send_multiple(net_t *net, uint8_t * const *buf, const size_t *buf_len, i
 		} else {
 			ret = sendmmsg(net->sockfd, msg, count, 0);
 		}
-		if (ret != total) {
-			WARN("can't send queries to %s\n", net->remote_str);
+		if (ret != count) {
+			WARN("can't send queries to %s: %s\n", net->remote_str, strerror(errno));
 			return KNOT_NET_ESEND;
 		}
 	}

@@ -1208,6 +1208,7 @@ query_t *query_create(const char *owner, const query_t *conf)
 		query->padding = conf->padding;
 		query->alignment = conf->alignment;
 		query->keepopen = conf->keepopen;
+		query->pipeline = conf->pipeline;
 		tls_params_copy(&query->tls, &conf->tls);
 		if (conf->tsig_key.name != NULL) {
 			int ret = knot_tsig_key_copy(&query->tsig_key,

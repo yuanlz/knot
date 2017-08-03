@@ -203,6 +203,8 @@ int net_set_local_info(net_t *net);
  */
 int net_send(net_t *net, const uint8_t *buf, const size_t buf_len);
 
+int net_send_multiple(net_t *net, uint8_t * const *buf, const size_t *buf_len, int count);
+
 /*!
  * \brief Receives data from connected remote server.
  *
