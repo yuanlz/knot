@@ -549,8 +549,8 @@ static bool check_reply_id(const knot_pkt_t *reply,
 	uint16_t reply_id = knot_wire_get_id(reply->wire);
 
 	if (reply_id != query_id) {
-		WARN("reply ID (%u) is different from query ID (%u)\n",
-		     reply_id, query_id);
+		/*WARN("reply ID (%u) is different from query ID (%u)\n",
+		     reply_id, query_id);*/
 		return false;
 	}
 
@@ -639,17 +639,21 @@ static int sign_query(knot_pkt_t *pkt, const query_t *query, sign_context_t *ctx
 
 	return KNOT_EOK;
 }
-
+/*!
+ * \brief TODO - ignore tc rework
+ */
 static int process_query_packet(knot_pkt_t      * const *queries,
 				const sign_context_t  *sign_ctx,
 				int count,
                                 net_t                 *net,
-                                const query_t        *queries_ctx)
+				query_t        * const *queries_ctx)
 {
-	struct timespec	t_start, t_query;//, t_end;
-	//knot_pkt_t	*reply;
-	//uint8_t		in[MAX_PACKET_SIZE];
-	//int		in_len;
+	struct timespec	t_start, t_query, t_end;
+	knot_pkt_t	*query = NULL;
+	const query_t		*query_ctx = NULL;
+	knot_pkt_t	*reply;
+	uint8_t		in[MAX_PACKET_SIZE];
+	int		in_len;
 	int		ret = 0;
 
 	uint8_t **buffer = calloc(count, sizeof(*buffer));
@@ -672,116 +676,131 @@ static int process_query_packet(knot_pkt_t      * const *queries,
 
 	// Get stop query time and start reply time.
 	t_query = time_now();
-/*
-#if USE_DNSTAP
-	// Make the dnstap copy of the query.
-	write_dnstap(query_ctx->dt_writer, true, query->wire, query->size,
-	             net, &t_query, NULL);
-#endif // USE_DNSTAP
 
-	// Print query packet if required.
-	if (style->show_query) {
-		// Create copy of query packet for parsing.
-		knot_pkt_t *q = knot_pkt_new(query->wire, query->size, NULL);
-		if (q != NULL) {
-			if (knot_pkt_parse(q, 0) == KNOT_EOK) {
-				print_packet(q, net, query->size,
-				             time_diff_ms(&t_start, &t_query), 0,
-				             false, style);
+	// Loop over incoming messages, unless reply id is correct or timeout.
+	for (int i = 0; i < count; i++) {
+		bool received = false;
+		while (!received) {
+			// Receive a reply message.
+			in_len = net_receive(net, in, sizeof(in));
+			if (in_len <= 0) {
+				return -1;
+			}
+
+			// Get stop reply time.
+			t_end = time_now();
+
+			// Create reply packet structure to fill up.
+			reply = knot_pkt_new(in, in_len, NULL);
+			if (reply == NULL) {
+				ERR("internal error (%s)\n", knot_strerror(KNOT_ENOMEM));
+				return 0;
+			}
+
+			// Parse reply to the packet structure.
+			if (knot_pkt_parse(reply, KNOT_PF_NOCANON) != KNOT_EOK) {
+				ERR("malformed reply packet from %s\n", net->remote_str);
+				knot_pkt_free(&reply);
+				return 0;
+			}
+
+			// Compare reply header id.
+			for (int x = 0; x < count; x++) {
+				if (check_reply_id(reply, queries[x])) {
+					query = queries[x];
+					query_ctx = queries_ctx[x];
+					received = true;
+					break;
+				}
+
+			}
+
+			if (received) {
+				break;
+			}
+
+			// Check for timeout.
+			if (time_diff_ms(&t_query, &t_end) > 1000 * net->wait) {
+				knot_pkt_free(&reply);
+				return -1;
+			}
+
+			knot_pkt_free(&reply);
+		}
+
+		// Check for TC bit and repeat query with TCP if required. REWORK - TODO
+		/*
+		if (knot_wire_get_tc(reply->wire) != 0 &&
+		    query_ctx->ignore_tc == false && net->socktype == SOCK_DGRAM) {
+			WARN("truncated reply from %s, retrying over TCP\n",
+			     net->remote_str);
+			knot_pkt_free(&reply);
+			net_close(net);
+
+			net->socktype = SOCK_STREAM;
+
+			ret = net_connect(net);
+			if (ret != KNOT_EOK) {
+				return -1;
+			}
+
+			return process_query_packet(query, net, query_ctx, true,
+						    sign_ctx, query_ctx->style);
+		}*/
+
+		#if USE_DNSTAP
+			// Make the dnstap copy of the query.
+			write_dnstap(query_ctx->dt_writer, true, query->wire, query->size,
+				     net, &t_query, NULL);
+		#endif // USE_DNSTAP
+
+		// Print query packet if required.
+		if (query_ctx->style.show_query) {
+			// Create copy of query packet for parsing.
+			knot_pkt_t *q = knot_pkt_new(query->wire, query->size, NULL);
+			if (q != NULL) {
+				if (knot_pkt_parse(q, 0) == KNOT_EOK) {
+					print_packet(q, net, query->size,
+						     time_diff_ms(&t_start, &t_query), 0,
+						     false, &query_ctx->style);
+				} else {
+					ERR("can't print query packet\n");
+				}
+				knot_pkt_free(&q);
 			} else {
 				ERR("can't print query packet\n");
 			}
-			knot_pkt_free(&q);
-		} else {
-			ERR("can't print query packet\n");
+
+			printf("\n");
 		}
 
-		printf("\n");
-	}
+		#if USE_DNSTAP
+				// Make the dnstap copy of the response.
+				write_dnstap(query_ctx->dt_writer, false, in, in_len, net,
+					     &t_query, &t_end);
+		#endif // USE_DNSTAP
 
-	// Loop over incoming messages, unless reply id is correct or timeout.
-	while (true) {
-		// Receive a reply message.
-		in_len = net_receive(net, in, sizeof(in));
-		if (in_len <= 0) {
-			return -1;
-		}
+		// Check for question sections equality.
+		check_reply_question(reply, query);
 
-		// Get stop reply time.
-		t_end = time_now();
+		// Check QR bit
+		check_reply_qr(reply);
 
-#if USE_DNSTAP
-		// Make the dnstap copy of the response.
-		write_dnstap(query_ctx->dt_writer, false, in, in_len, net,
-		             &t_query, &t_end);
-#endif // USE_DNSTAP
+		// Print reply packet.
+		print_packet(reply, net, in_len, time_diff_ms(&t_query, &t_end), 0,
+			     true, &query_ctx->style);
 
-		// Create reply packet structure to fill up.
-		reply = knot_pkt_new(in, in_len, NULL);
-		if (reply == NULL) {
-			ERR("internal error (%s)\n", knot_strerror(KNOT_ENOMEM));
-			return 0;
-		}
-
-		// Parse reply to the packet structure.
-		if (knot_pkt_parse(reply, KNOT_PF_NOCANON) != KNOT_EOK) {
-			ERR("malformed reply packet from %s\n", net->remote_str);
-			knot_pkt_free(&reply);
-			return 0;
-		}
-
-		// Compare reply header id.
-		if (check_reply_id(reply, query)) {
-			break;
-		// Check for timeout.
-		} else if (time_diff_ms(&t_query, &t_end) > 1000 * net->wait) {
-			knot_pkt_free(&reply);
-			return -1;
+		// Verify signature if a key was specified.
+		if (sign_ctx->digest != NULL) {
+			ret = verify_packet(reply, sign_ctx);
+			if (ret != KNOT_EOK) {
+				WARN("reply verification for %s (%s)\n",
+				     net->remote_str, knot_strerror(ret));
+			}
 		}
 
 		knot_pkt_free(&reply);
 	}
-
-	// Check for TC bit and repeat query with TCP if required.
-	if (knot_wire_get_tc(reply->wire) != 0 &&
-	    ignore_tc == false && net->socktype == SOCK_DGRAM) {
-		WARN("truncated reply from %s, retrying over TCP\n",
-		     net->remote_str);
-		knot_pkt_free(&reply);
-		net_close(net);
-
-		net->socktype = SOCK_STREAM;
-
-		ret = net_connect(net);
-		if (ret != KNOT_EOK) {
-			return -1;
-		}
-
-		return process_query_packet(query, net, query_ctx, true,
-		                            sign_ctx, style);
-	}
-
-	// Check for question sections equality.
-	check_reply_question(reply, query);
-
-	// Check QR bit
-	check_reply_qr(reply);
-
-	// Print reply packet.
-	print_packet(reply, net, in_len, time_diff_ms(&t_query, &t_end), 0,
-	             true, style);
-
-	// Verify signature if a key was specified.
-	if (sign_ctx->digest != NULL) {
-		ret = verify_packet(reply, sign_ctx);
-		if (ret != KNOT_EOK) {
-			WARN("reply verification for %s (%s)\n",
-			     net->remote_str, knot_strerror(ret));
-		}
-	}
-
-	knot_pkt_free(&reply);
-*/
 failed_process_query_packet:
 	free(buffer);
 	return ret;
@@ -1160,7 +1179,7 @@ static void process_operation(const query_t *query)
 	knot_pkt_free(&out_packet);
 }
 */
-static int queries_send(query_t **queries, int count, srv_info_t *remote, net_t *net, int socktype)
+static int queries_send(query_t * const *queries, int count, srv_info_t *remote, net_t *net, int socktype)
 {
 	if (queries == NULL || count <= 0) {
 		DBG_NULL;
@@ -1191,7 +1210,7 @@ static int queries_send(query_t **queries, int count, srv_info_t *remote, net_t 
 
 	for (size_t i = 0; i <= query->retries; i++) {
 		//if (query->operation == OPERATION_QUERY) { // OBSOLETE - DECIDE ON LOWER LEVEL
-		ret = process_query_packet(out_packet, sign_ctx, count, net, queries[0]);
+		ret = process_query_packet(out_packet, sign_ctx, count, net, queries);
 		/*} else {
 			ret = process_xfr_packet(out_packet, net, query,
 						 &sign_ctx, &query->style);
@@ -1248,7 +1267,7 @@ finish_queries_send:
 }
 
 
-static void process_pipeline(query_t **pipeline, int count)
+static void process_pipeline(query_t * const *pipeline, int count)
 {
 	node_t     *server = NULL;
 	net_t      *net_ptr = NULL;
