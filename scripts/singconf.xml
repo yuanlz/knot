@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- $Id: kasp.xml.in 1154 2009-06-24 13:02:25Z jakob $ -->
+<SignerConfiguration>
+    <Zone name="opendnssec.org">
+        <Signatures>
+            <Resign>PT2H</Resign>
+            <Refresh>P3D</Refresh>
+            <Validity>
+                <Default>P7D</Default>
+                <Denial>P7D</Denial>
+            </Validity>
+            <Jitter>PT12H</Jitter>
+            <InceptionOffset>PT300S</InceptionOffset>
+        </Signatures>
+        <Denial>
+            <NSEC3>
+                <TTL>PT3600S</TTL>
+                <OptOut/>
+                <Resalt>P100D</Resalt>
+                <Hash>
+                    <Algorithm>1</Algorithm>
+                    <Iterations>5</Iterations>
+                    <Salt length="8"/>
+                </Hash>
+            </NSEC3>
+        </Denial>
+        <Keys>
+            <TTL>PT3600S</TTL>
+            <Key>
+                <Flags>257</Flags>
+                <Algorithm>5</Algorithm>
+                <Locator>DFE7265B783F418685380AA784C2F31D</Locator>
+                <Publish/>
+                <KSK/>
+                <ZSK/>
+            </Key>
+        </Keys>
+        <SOA>
+            <TTL>PT3600S</TTL>
+            <Minimum>PT3600S</Minimum>
+            <Serial>unixtime</Serial>
+        </SOA>
+    </Zone>
+</SignerConfiguration>

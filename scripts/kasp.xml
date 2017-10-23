@@ -1,0 +1,69 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- $Id: kasp.xml.in 1154 2009-06-24 13:02:25Z jakob $ -->
+<KASP>
+   <Policy name="default">
+	<Description>A default policy that will amaze you and your friends</Description>       
+	<Signatures>
+            <Resign>PT2H</Resign>
+            <Refresh>P3D</Refresh>
+            <Validity>
+                    <Default>P14D</Default>
+                    <Denial>P14D</Denial>
+            </Validity>
+            <Jitter>PT12H</Jitter>
+            <InceptionOffset>PT300S</InceptionOffset>
+            <MaxZoneTTL>P1D</MaxZoneTTL>
+        </Signatures>
+	<Denial>
+            <NSEC3>
+                <TTL>PT3600S</TTL>
+                <OptOut/>
+                <Resalt>P100D</Resalt>
+                <Hash>
+                    <Algorithm>1</Algorithm>
+                    <Iterations>5</Iterations>
+                    <Salt length="8"/>
+                </Hash>
+            </NSEC3>
+        </Denial>
+ 	<Keys>            
+		<TTL>PT3600S</TTL>
+            	<RetireSafety>PT3600S</RetireSafety>
+                        <PublishSafety>PT3600S</PublishSafety>
+            	<ShareKeys/>
+            	<Purge>P14D</Purge>
+ 		<KSK>
+                	<Algorithm length="2048">8</Algorithm>
+                	<Lifetime>P1Y</Lifetime>
+                	<Repository>softHSM</Repository>
+                	<!-- <Standby>1</Standby> (Experimental) -->
+                	<ManualRollover/>
+            	</KSK>
+		<ZSK>
+		        <Algorithm length="1024">8</Algorithm>
+		        <Lifetime>P90D</Lifetime>
+		        <Repository>softHSM</Repository>
+		        <!-- <Standby>1</Standby> (Experimental) -->
+		</ZSK>
+ 	</Keys>
+	<Zone>
+            <PropagationDelay>PT9999S</PropagationDelay>
+	    <MaxZoneTTL>P2D</MaxZoneTTL>
+            <SOA>
+                <TTL>PT3600S</TTL>
+                <Minimum>PT3600S</Minimum>
+                <Serial>unixtime</Serial>
+            </SOA>
+        </Zone>
+ 	<Parent>
+            <PropagationDelay>PT9999S</PropagationDelay>
+            <DS>
+                <TTL>PT3600S</TTL>
+            </DS>
+            <SOA> 
+                <TTL>PT3600S</TTL>
+                <Minimum>PT3600S</Minimum>
+            </SOA>
+        </Parent>
+</Policy>
+</KASP>

@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- $Id: zonelist.xml.in 1147 2009-06-24 12:18:17Z jakob $ -->
+<ZoneList>
+    <Zone name="example.com">
+        <Policy>default</Policy>
+        <SignerConfiguration>/var/opendnssec/signconf/example.com.xml</SignerConfiguration>
+        <Adapters>
+            <Input>
+                <Adapter type="File">/var/opendnssec/unsigned/example.com</Adapter>
+            </Input>
+            <Output>
+                <Adapter type="DNS">/etc/opendnssec/addns.xml</Adapter>
+            </Output>
+        </Adapters>
+    </Zone>
+</ZoneList>
