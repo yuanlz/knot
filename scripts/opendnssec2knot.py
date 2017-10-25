@@ -5,6 +5,9 @@ import xml.etree.ElementTree as ET
 zones = dict()
 policies = dict()
 
+def opendnssec_knot_time_convert(time):
+    #TODO: https: // wiki.opendnssec.org / display / DOCS20 / Date + Time + Durations
+
 def process_kasp(root):
     global policies
     out = ''
@@ -12,9 +15,24 @@ def process_kasp(root):
         if policy.tag != "Policy":
             raise
         out = 'policy:\n  - id: ' + policy.attrib['name'] + '\n    manual: false\n'
-        #TODO: Keystore?
-        policies[policy.attrib['name']] = out
+        # TODO SIGNATURES, KEYS, ZONE, PARENT
+        for item in policy:
+            if item.tag == "Denial":
+                if item[0].tag == "NSEC3":
+                    # TODO: TTL, OptOut?
+                    out += "    nsec3: true\n"
+                    for nsec3item in item[0]:
+                        if nsec3item.tag == "Resalt":
+                            # TODO: how to process opendnssec time
+                            out += "   nsec3-salt-lifetime: " + nsec3item.text + '\n'
+                        elif nsec3item.tag == "Hash":
+                            for hash in nsec3item:
+                                if hash.tag == "Iterations":
+                                    out += "    nsec3-iterations: " + hash.text + '\n'
+                                elif hash.tag == "Salt":
+                                    out += "    nsec3-salt-length: " + hash.attrib['length'] + '\n'
 
+            policies[policy.attrib['name']] = out
     return out
 
 def process_zonelist(root):
