@@ -130,3 +130,91 @@ server configuration:
       $ sudo -u knot keymgr ...
 
 4. Follow :ref:`Automatic DNSSEC signing` steps to configure DNSSEC signing.
+
+.. _Knot DNS DNSSEC for OpenDNSSEC users:
+
+Knot DNS DNSSEC for OpenDNSSEC users
+====================================
+
+.. NOTE::
+    Following manual is aimed at migration from OpenDNSSEC 2.X
+
+Since Knot DNS introduced automatic DNSSEC signing back in version 1.5 a lot has changed. 
+At this point you don't need OpenDNSSEC for key management anymore. All you need to do
+is configure Knot DNS and it will take care of it for you.
+
+Automated DNSSEC signing explained: :ref:`dnssec`
+
+.. _Time format in configuration:
+Time format in configuration
+----------------------------
+
+Knot DNS uses different notation for time intervals. However the difference is simple. In Knot DNS there aren't years and months, and letters P and T in the notation.
+
+Example::
+
+  PT3600S is 3600 in Knot DNS
+
+  P7D is 7d in Knot DNS
+
+.. _Zone Configuration:
+
+Zone Configuration
+------------------
+
+In section Zone few items need to be added. Relevant configutation file for this section is zonefilelist.xml
+
+1. dnssec-signing: true - Turns on automated signing
+
+2. dnssec-policy: STR
+
+   OpenDNSSEC parameter Policy under given zone.
+
+3. TODO: Zones SignerConfiguration
+
+For full zone configuration see :ref:`Zone section`:
+
+.. _Policy Configuration:
+
+Policy Configuration
+--------------------
+
+This section in Knot DNS contains most of the configurateble information about DNSSEC.
+Information relevant to this section is located in OpenDNSSEC's kasp.xml and signconf.xml.
+
+For full policy configuration see :ref:`Policy section`:
+ 
+1. id is the name attribut in OpenDNSSEC policy section
+
+2. keystore: STR TODO
+
+3. single-type-signing: off if you have KSK and ZSK, on if not
+
+4. algorithm, ksk-size and zsk-size
+
+   Algorithm requires string value of algorithm (same for both keys)
+
+   Algorithms integer value can be found under SignerConfiguration - Zone - Keys - Key - Algorithm
+   and KSK/ZSK size as atribute of that item.
+
+   Knot supports rsasha1, rsasha1-nsec3-sha1, rsasha256, rsasha512, ecdsap256sha256, ecdsap384sha384 and ed25519.
+
+5. ksk-shared: on
+
+   On if zones using this policy should use the same KSK
+
+TODO:
+     dnskey-ttl: TIME
+     zsk-lifetime: TIME
+     ksk-lifetime: TIME
+     propagation-delay: TIME
+     rrsig-lifetime: TIME
+     rrsig-refresh: TIME
+     nsec3: BOOL
+     nsec3-iterations: INT
+     nsec3-opt-out: BOOL
+     nsec3-salt-length: INT
+     nsec3-salt-lifetime: TIME
+     ksk-submission: submission_id
+
+
