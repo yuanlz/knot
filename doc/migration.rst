@@ -136,16 +136,30 @@ server configuration:
 Knot DNS DNSSEC for OpenDNSSEC users
 ====================================
 
-.. NOTE::
-    Following manual is aimed at migration from OpenDNSSEC 2.X
+With continuous improvement of automated key management in Knot DNS
+you may decide to switch from OpenDNSSEC to Knot DNS and have it all in one place.
 
-Since Knot DNS introduced automatic DNSSEC signing back in version 1.5 a lot has changed. 
-At this point you don't need OpenDNSSEC for key management anymore. All you need to do
-is configure Knot DNS and it will take care of it for you.
 
+Knot's configuration consists of sections and ID's serving as references (similarly as OpenDNSSEC's configuration files).
+
+OpenDNSSEC's Signer Configuration and KASP is under :ref:`Policy section` in Knot DNS.
+Knot DNS choozes keys to sign with by looking into the zone, not by configuration.
+Also SOA is not configured. Therefore those records need to be already in the zonefile.
+
+Repository in Configuration is in :ref:`Keystore section` TODO: more about keystore
+Keystore's ID needs to be add to policies covering zones that have keys stored in given keystore.
+
+:ref:`Zone section` is used for configuring zones. In OpenDNSSEC, this is covered by Zone List.
+To configure content of addns configuration file you need to create several items.
+:ref:`Key section` serves for configuring TSIG. Outbounf section in OpenDNSSEC in cover by Knot's :ref:`ACL section` and
+Inbound by :ref:`Remote section`.
+With Inbound configuration you have to be carefull to assing the correct ID to the corred parameter.
+
+In addition to converting your configuration, there are additional setting for Knot to use automated signing.
 Automated DNSSEC signing explained: :ref:`dnssec`
 
 .. _Time format in configuration:
+
 Time format in configuration
 ----------------------------
 
@@ -156,65 +170,3 @@ Example::
   PT3600S is 3600 in Knot DNS
 
   P7D is 7d in Knot DNS
-
-.. _Zone Configuration:
-
-Zone Configuration
-------------------
-
-In section Zone few items need to be added. Relevant configutation file for this section is zonefilelist.xml
-
-1. dnssec-signing: true - Turns on automated signing
-
-2. dnssec-policy: STR
-
-   OpenDNSSEC parameter Policy under given zone.
-
-3. TODO: Zones SignerConfiguration
-
-For full zone configuration see :ref:`Zone section`:
-
-.. _Policy Configuration:
-
-Policy Configuration
---------------------
-
-This section in Knot DNS contains most of the configurateble information about DNSSEC.
-Information relevant to this section is located in OpenDNSSEC's kasp.xml and signconf.xml.
-
-For full policy configuration see :ref:`Policy section`:
- 
-1. id is the name attribut in OpenDNSSEC policy section
-
-2. keystore: STR TODO
-
-3. single-type-signing: off if you have KSK and ZSK, on if not
-
-4. algorithm, ksk-size and zsk-size
-
-   Algorithm requires string value of algorithm (same for both keys)
-
-   Algorithms integer value can be found under SignerConfiguration - Zone - Keys - Key - Algorithm
-   and KSK/ZSK size as atribute of that item.
-
-   Knot supports rsasha1, rsasha1-nsec3-sha1, rsasha256, rsasha512, ecdsap256sha256, ecdsap384sha384 and ed25519.
-
-5. ksk-shared: on
-
-   On if zones using this policy should use the same KSK
-
-TODO:
-     dnskey-ttl: TIME
-     zsk-lifetime: TIME
-     ksk-lifetime: TIME
-     propagation-delay: TIME
-     rrsig-lifetime: TIME
-     rrsig-refresh: TIME
-     nsec3: BOOL
-     nsec3-iterations: INT
-     nsec3-opt-out: BOOL
-     nsec3-salt-length: INT
-     nsec3-salt-lifetime: TIME
-     ksk-submission: submission_id
-
-
