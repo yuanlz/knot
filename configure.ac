@@ -50,6 +50,11 @@ AC_PROG_CPP_WERROR
 # Default compiler flags
 CFLAGS="$CFLAGS -Wall -Werror=format-security -Werror=implicit -Wstrict-prototypes"
 
+# Add build hardening flags
+AX_CHECK_COMPILE_FLAG("-fstack-protector-all", [CFLAGS="$CFLAGS -fstack-protector-all"])
+AX_CHECK_COMPILE_FLAG("-fPIE", [CFLAGS="$CFLAGS -fPIE"])
+AX_CHECK_LINK_FLAG(["-pie"], [LDFLAGS="$LDFLAGS -pie"])
+
 # Checks for programs.
 m4_ifdef([AM_PROG_AR], [AM_PROG_AR]) # call AM_PROG_AR only if available
 
