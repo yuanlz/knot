@@ -1,4 +1,4 @@
-/*  Copyright (C) 2017 CZ.NIC, z.s.p.o. <knot-dns@labs.nic.cz>
+/*  Copyright (C) 2018 CZ.NIC, z.s.p.o. <knot-dns@labs.nic.cz>
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -108,9 +108,9 @@ static int rrtypelist_callback(zone_node_t *node, void *data)
 {
 	rrtypelist_ctx_t *ctx = data;
 	for (int i = 0; i < node->rrset_count; i++) {
-		knot_rrset_t rrset = node_rrset_at(node, i);
-		rrtypelist_add(ctx->arr, rrset.type);
-		*ctx->counter += rrset.rrs.rr_count;
+		knot_rrset_t *rrset = node_rrset_at(node, i);
+		rrtypelist_add(ctx->arr, rrset->type);
+		*ctx->counter += rrset->rrs.rr_count;
 	}
 	return KNOT_EOK;
 }

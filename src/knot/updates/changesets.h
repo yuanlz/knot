@@ -1,4 +1,4 @@
-/*  Copyright (C) 2017 CZ.NIC, z.s.p.o. <knot-dns@labs.nic.cz>
+/*  Copyright (C) 2018 CZ.NIC, z.s.p.o. <knot-dns@labs.nic.cz>
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -249,7 +249,7 @@ int changeset_iter_all(changeset_iter_t *itt, const changeset_t *ch);
  *
  * \return Next RRSet in iterator, empty RRSet if iteration done.
  */
-knot_rrset_t changeset_iter_next(changeset_iter_t *it);
+knot_rrset_t *changeset_iter_next(changeset_iter_t *it);
 
 /*!
  * \brief Free resources allocated by changeset iterator.

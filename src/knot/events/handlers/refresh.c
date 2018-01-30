@@ -1,4 +1,4 @@
-/*  Copyright (C) 2017 CZ.NIC, z.s.p.o. <knot-dns@labs.nic.cz>
+/*  Copyright (C) 2018 CZ.NIC, z.s.p.o. <knot-dns@labs.nic.cz>
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -1029,7 +1029,7 @@ static int try_refresh(conf_t *conf, zone_t *zone, const conf_remote_t *master, 
 
 	try_refresh_ctx_t *trctx = ctx;
 
-	knot_rrset_t soa = { 0 };
+	knot_rrset_t *soa = NULL;
 	if (zone->contents) {
 		soa = node_rrset(zone->contents->apex, KNOT_RRTYPE_SOA);
 	}
@@ -1038,7 +1038,7 @@ static int try_refresh(conf_t *conf, zone_t *zone, const conf_remote_t *master, 
 		.zone = zone,
 		.conf = conf,
 		.remote = (struct sockaddr *)&master->addr,
-		.soa = zone->contents && !trctx->force_axfr ? &soa : NULL,
+		.soa = zone->contents && !trctx->force_axfr ? soa : NULL,
 		.max_zone_size = max_zone_size(conf, zone->name),
 	};
 

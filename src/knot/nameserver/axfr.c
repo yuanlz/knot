@@ -1,4 +1,4 @@
-/*  Copyright (C) 2017 CZ.NIC, z.s.p.o. <knot-dns@labs.nic.cz>
+/*  Copyright (C) 2018 CZ.NIC, z.s.p.o. <knot-dns@labs.nic.cz>
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -45,12 +45,12 @@ static int axfr_put_rrsets(knot_pkt_t *pkt, zone_node_t *node,
 
 	/* Append all RRs. */
 	for (unsigned i = state->cur_rrset; i < node->rrset_count; ++i) {
-		knot_rrset_t rrset = node_rrset_at(node, i);
-		if (rrset.type == KNOT_RRTYPE_SOA) {
+		knot_rrset_t *rrset = node_rrset_at(node, i);
+		if (rrset->type == KNOT_RRTYPE_SOA) {
 			continue;
 		}
 
-		int ret = knot_pkt_put(pkt, 0, &rrset, KNOT_PF_NOTRUNC);
+		int ret = knot_pkt_put(pkt, 0, rrset, KNOT_PF_NOTRUNC);
 		if (ret != KNOT_EOK) {
 			/* If something failed, remember the current RR for later. */
 			state->cur_rrset = i;
