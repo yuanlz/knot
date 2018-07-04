@@ -1001,20 +1001,6 @@ static int check_cname(const zone_node_t *node, semchecks_data_t *data)
 		return KNOT_EOK;
 	}
 
-	unsigned rrset_limit = 1;
-	/* With DNSSEC node can contain RRSIGs or NSEC */
-	if (node_rrtype_exists(node, KNOT_RRTYPE_NSEC)) {
-		rrset_limit += 1;
-	}
-	if (node_rrtype_exists(node, KNOT_RRTYPE_RRSIG)) {
-		rrset_limit += 1;
-	}
-
-	if (node->rrset_count > rrset_limit) {
-		data->handler->fatal_error = true;
-		data->handler->cb(data->handler, data->zone, node,
-		                  SEM_ERR_CNAME_EXTRA_RECORDS, NULL);
-	}
 	if (cname_rrs->rr_count != 1) {
 		data->handler->fatal_error = true;
 		data->handler->cb(data->handler, data->zone, node,
