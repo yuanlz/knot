@@ -71,7 +71,7 @@ int zone_backup_init(bool restore_mode, const char *backup_dir,
 	memcpy(ctx->backup_dir, backup_dir, backup_dir_len);
 
 	BACKUP_LOCKFILE(ctx, lockfile);
-	(void)mkdir(backup_dir, S_IRWXU|S_IRWXG|S_IRWXO);
+	(void)mkdir(backup_dir, S_IRWXU|S_IRWXG);
 	ctx->lock_file = open(lockfile, O_CREAT|O_EXCL, S_IRUSR|S_IWUSR);
 	if (ctx->lock_file < 0) {
 		free(ctx);
