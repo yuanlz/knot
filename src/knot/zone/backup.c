@@ -75,7 +75,8 @@ int zone_backup_init(bool restore_mode, const char *backup_dir,
 	ctx->lock_file = open(lockfile, O_CREAT|O_EXCL, S_IRUSR|S_IWUSR);
 	if (ctx->lock_file < 0) {
 		free(ctx);
-		return KNOT_EBUSY;
+		// Make the reported error better understandable than KNOT_EEXIST.
+		return errno == EEXIST ? KNOT_EBUSY : knot_map_errno();
 	}
 
 	pthread_mutex_init(&ctx->readers_mutex, NULL);
