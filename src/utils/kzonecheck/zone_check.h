@@ -19,4 +19,4 @@
 #include "libknot/libknot.h"
 
 int zone_check(const char *zone_file, const knot_dname_t *zone_name,
-               FILE *outfile, bool dnssec, time_t time);
+               FILE *outfile, int optional, time_t time);
