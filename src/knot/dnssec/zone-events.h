@@ -121,8 +121,9 @@ knot_time_t knot_dnssec_failover_delay(const kdnssec_ctx_t *ctx);
  * \brief Validate zone DNSSEC based on its contents.
  *
  * \param update         Zone update with contents.
+ * \param now            If not zero: adjust "now" to this timestamp.
  * \param incremental    Try to validate incrementally.
  *
  * \return KNOT_E*
  */
-int knot_dnssec_validate_zone(zone_update_t *update, bool incremental);
+int knot_dnssec_validate_zone(zone_update_t *update, knot_time_t now, bool incremental);

@@ -55,6 +55,7 @@ static void print_help(void)
 	       "Parameters:\n"
 	       " -o, --outdir <dir_name>  Output directory.\n"
 	       " -r, --rollover           Allow key rollovers and NSEC3 re-salt.\n"
+	       " -v, --verify             Only verify if zone is signed correctly.\n"
 	       " -t, --time <timestamp>   Current time specification.\n"
 	       "                            (default current UNIX time)\n"
 	       " -h, --help               Print the program help.\n"
@@ -74,11 +75,13 @@ int main(int argc, char *argv[])
 	zone_sign_roll_flags_t rollover = 0;
 	int64_t timestamp = 0;
 	zone_sign_reschedule_t next_sign = { 0 };
+	bool check_only = false;
 
 	struct option opts[] = {
 		{ "config",    required_argument, NULL, 'c' },
 		{ "outdir",    required_argument, NULL, 'o' },
 		{ "rollover",  no_argument,       NULL, 'r' },
+		{ "verify" ,   no_argument,       NULL, 'v' },
 		{ "time",      required_argument, NULL, 't' },
 		{ "help",      no_argument,       NULL, 'h' },
 		{ "version",   no_argument,       NULL, 'V' },
@@ -88,7 +91,7 @@ int main(int argc, char *argv[])
 	tzset();
 
 	int opt;
-	while ((opt = getopt_long(argc, argv, "c:o:rt:hV", opts, NULL)) != -1) {
+	while ((opt = getopt_long(argc, argv, "c:o:rvt:hV", opts, NULL)) != -1) {
 		switch (opt) {
 		case 'c':
 			confile = optarg;
@@ -98,6 +101,9 @@ int main(int argc, char *argv[])
 			break;
 		case 'r':
 			rollover = KEY_ROLL_ALLOW_ALL;
+			break;
+		case 'v':
+			check_only = true;
 			break;
 		case 't':
 			timestamp = atol(optarg);
@@ -169,6 +175,22 @@ int main(int argc, char *argv[])
 	if (ret != KNOT_EOK) {
 		printf("Failed to initialize zone update (%s)\n", knot_strerror(ret));
 		zone_contents_deep_free(unsigned_conts);
+		goto fail;
+	}
+
+	if (check_only) {
+		ret = knot_dnssec_validate_zone(&up, timestamp, false);
+		if (ret != KNOT_EOK) {
+			printf("DNSSEC validation failed (%s)\n", knot_strerror(ret));
+			char name_str[KNOT_DNAME_TXT_MAXLEN], type_str[16];
+			if (knot_dname_to_str(name_str, up.validation_hint.node, sizeof(name_str)) != NULL &&
+			    knot_rrtype_to_string(up.validation_hint.rrtype, type_str, sizeof(type_str)) >= 0) {
+				printf("DNSSEC validation hint: %s %s\n", name_str, type_str);
+			}
+		} else {
+			printf("DNSSEC validation successful\n");
+		}
+		zone_update_clear(&up);
 		goto fail;
 	}
 
