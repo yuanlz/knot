@@ -180,8 +180,8 @@ static const struct check_function CHECK_FUNCTIONS[] = {
 	{ check_cname,          MANDATORY },
 	{ check_dname,          MANDATORY },
 	{ check_delegation,     MANDATORY }, // mandatory for apex, optional for others
+	{ check_ds,             OPTIONAL },
 	{ check_submission,     NSEC | NSEC3 },
-	{ check_ds,             NSEC | NSEC3 },
 	{ check_rrsig,          NSEC | NSEC3 },
 	{ check_rrsig_signed,   NSEC | NSEC3 },
 	{ check_nsec_bitmap,    NSEC | NSEC3 },
