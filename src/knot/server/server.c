@@ -510,6 +510,9 @@ static int configure_sockets(conf_t *conf, server_t *s)
 		if (new_if != NULL) {
 			memcpy(&newlist[real_nifs++], new_if, sizeof(*newlist));
 			free(new_if);
+		} else {
+			free(rundir);
+			return KNOT_ERROR;
 		}
 		conf_val_next(&listen_val);
 	}
@@ -528,6 +531,8 @@ static int configure_sockets(conf_t *conf, server_t *s)
 		if (new_if != NULL) {
 			memcpy(&newlist[real_nifs++], new_if, sizeof(*newlist));
 			free(new_if);
+		} else {
+			return KNOT_ERROR;
 		}
 		conf_val_next(&lisxdp_val);
 	}
@@ -930,7 +935,7 @@ int server_reload(server_t *server)
 		log_reconfigure(conf());
 	}
 	if (full || (flags & CONF_IO_FRLD_SRV)) {
-		server_reconfigure(conf(), server);
+		(void)server_reconfigure(conf(), server);
 		warn_server_reconfigure(conf(), server);
 		stats_reconfigure(conf(), server);
 	}
@@ -1034,10 +1039,10 @@ static int reconfigure_timer_db(conf_t *conf, server_t *server)
 	return ret;
 }
 
-void server_reconfigure(conf_t *conf, server_t *server)
+int server_reconfigure(conf_t *conf, server_t *server)
 {
 	if (conf == NULL || server == NULL) {
-		return;
+		return KNOT_EINVAL;
 	}
 
 	int ret;
@@ -1064,6 +1069,7 @@ void server_reconfigure(conf_t *conf, server_t *server)
 		if ((ret = configure_sockets(conf, server)) != KNOT_EOK) {
 			log_error("failed to configure server sockets (%s)",
 			          knot_strerror(ret));
+			return ret;
 		}
 	}
 
@@ -1084,6 +1090,8 @@ void server_reconfigure(conf_t *conf, server_t *server)
 		log_error("failed to reconfigure Timer DB (%s)",
 		          knot_strerror(ret));
 	}
+
+	return KNOT_EOK;
 }
 
 void server_update_zones(conf_t *conf, server_t *server)

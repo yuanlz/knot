@@ -495,7 +495,15 @@ int main(int argc, char **argv)
 
 	/* Reconfigure server interfaces.
 	 * @note This MUST be done before we drop privileges. */
-	server_reconfigure(conf(), &server);
+	ret = server_reconfigure(conf(), &server);
+	if (ret != KNOT_EOK) {
+		log_fatal("failed to configure server");
+		server_wait(&server);
+		server_deinit(&server);
+		conf_free(conf());
+		log_close();
+		return EXIT_FAILURE;
+	}
 
 	/* Alter privileges. */
 	int uid, gid;
