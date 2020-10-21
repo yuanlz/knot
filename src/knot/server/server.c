@@ -230,7 +230,7 @@ static int enable_fastopen(int sock, int backlog)
 	return KNOT_EOK;
 }
 
-static iface_t *server_init_xdp_iface(struct sockaddr_storage *addr, unsigned *thread_id_start)
+static iface_t *server_init_xdp_iface(struct sockaddr_storage *addr, bool check_route, unsigned *thread_id_start)
 {
 #ifndef ENABLE_XDP
 	assert(0);
@@ -261,16 +261,18 @@ static iface_t *server_init_xdp_iface(struct sockaddr_storage *addr, unsigned *t
 	new_if->xdp_first_thread_id = *thread_id_start;
 	*thread_id_start += iface.queues;
 
+	uint32_t xdp_option = check_route ? KNOT_XDP_CHECK_ROUTE : 0;
+
 	for (int i = 0; i < iface.queues; i++) {
 		knot_xdp_load_bpf_t mode =
 			(i == 0 ? KNOT_XDP_LOAD_BPF_ALWAYS : KNOT_XDP_LOAD_BPF_NEVER);
 		ret = knot_xdp_init(new_if->xdp_sockets + i, iface.name, i,
-		                    iface.port, mode);
+		                    iface.port | xdp_option, mode);
 		if (ret == -EBUSY && i == 0) {
 			log_notice("XDP interface %s@%u is busy, retrying initializaion",
 			           iface.name, iface.port);
 			ret = knot_xdp_init(new_if->xdp_sockets + i, iface.name, i,
-			                    iface.port, KNOT_XDP_LOAD_BPF_ALWAYS_UNLOAD);
+			                    iface.port | xdp_option, KNOT_XDP_LOAD_BPF_ALWAYS_UNLOAD);
 		}
 		if (ret != KNOT_EOK) {
 			log_warning("failed to initialize XDP interface %s@%u, queue %d (%s)",
@@ -476,6 +478,7 @@ static int configure_sockets(conf_t *conf, server_t *s)
 	conf_val_t listen_val = conf_get(conf, C_SRV, C_LISTEN);
 	conf_val_t lisxdp_val = conf_get(conf, C_SRV, C_LISTEN_XDP);
 	conf_val_t rundir_val = conf_get(conf, C_SRV, C_RUNDIR);
+	conf_val_t xdp_chk_route = conf_get(conf, C_SRV, C_XDP_CHK_ROUTE);
 
 	if (lisxdp_val.code == KNOT_EOK) {
 		struct rlimit no_limit = { RLIM_INFINITY, RLIM_INFINITY };
@@ -524,7 +527,7 @@ static int configure_sockets(conf_t *conf, server_t *s)
 		sockaddr_tostr(addr_str, sizeof(addr_str), &addr);
 		log_info("binding to XDP interface %s", addr_str);
 
-		iface_t *new_if = server_init_xdp_iface(&addr, &thread_id);
+		iface_t *new_if = server_init_xdp_iface(&addr, conf_bool(&xdp_chk_route), &thread_id);
 		if (new_if != NULL) {
 			memcpy(&newlist[real_nifs++], new_if, sizeof(*newlist));
 			free(new_if);

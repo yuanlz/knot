@@ -148,6 +148,7 @@ General options related to the server.
      answer-rotation: BOOL
      listen: ADDR[@INT] ...
      listen-xdp: STR[@INT] | ADDR[@INT] ...
+     xdp-check-route: BOOL
 
 .. CAUTION::
    When you change configuration parameters dynamically or via configuration file
@@ -425,6 +426,17 @@ Change of this parameter requires restart of the Knot server to take effect.
    recommended to also :ref:`listen <server_listen>` on the addresses which are
    intended to offer the DNS service, at least to fulfil the DNS requirement for
    working TCP.
+
+.. _server_xdp-check-route:
+
+xdp-check-route
+---------------
+
+The route of outgoing answer is checked for each packet received on the XDP iface.
+If the route differs from where the packet came from, it will be processed through
+kernel (avoiding XDP).
+
+*Default:* off
 
 .. _Control section:
 

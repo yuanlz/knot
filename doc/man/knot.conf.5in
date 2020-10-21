@@ -197,6 +197,7 @@ server:
     answer\-rotation: BOOL
     listen: ADDR[@INT] ...
     listen\-xdp: STR[@INT] | ADDR[@INT] ...
+    xdp\-check\-route: BOOL
 .ft P
 .fi
 .UNINDENT
@@ -406,6 +407,13 @@ intended to offer the DNS service, at least to fulfil the DNS requirement for
 working TCP.
 .UNINDENT
 .UNINDENT
+.SS xdp\-check\-route
+.sp
+The route of outgoing answer is checked for each packet received on the XDP iface.
+If the route differs from where the packet came from, it will be processed through
+kernel (avoiding XDP).
+.sp
+\fIDefault:\fP off
 .SH CONTROL SECTION
 .sp
 Configuration of the server control interface.

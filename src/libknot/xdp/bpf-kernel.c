@@ -135,7 +135,18 @@ int xdp_redirect_udp_func(struct xdp_md *ctx)
 		return XDP_DROP;
 	}
 
-	if (1) {
+	/* Get the queue options. */
+	int index = ctx->rx_queue_index;
+	int *qidconf = bpf_map_lookup_elem(&qidconf_map, &index);
+	if (!qidconf) {
+		return XDP_ABORTED;
+	}
+
+	__u32 port_info = *qidconf;
+
+	if (port_info & KNOT_XDP_CHECK_ROUTE) {
+		port_info &= ~KNOT_XDP_CHECK_ROUTE;
+
 		__builtin_memset(&fib_params, 0, sizeof(fib_params));
 
 		if (eth->h_proto == __constant_htons(ETH_P_IP)) {
@@ -191,15 +202,7 @@ int xdp_redirect_udp_func(struct xdp_md *ctx)
 		}
 	}
 
-	/* Get the queue options. */
-	int index = ctx->rx_queue_index;
-	int *qidconf = bpf_map_lookup_elem(&qidconf_map, &index);
-	if (!qidconf) {
-		return XDP_ABORTED;
-	}
-
 	/* Treat specified destination ports only. */
-	__u32 port_info = *qidconf;
 	switch (port_info & KNOT_XDP_LISTEN_PORT_MASK) {
 	case KNOT_XDP_LISTEN_PORT_DROP:
 		return XDP_DROP;
