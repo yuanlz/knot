@@ -685,7 +685,7 @@ int main(int argc, char *argv[])
 		printf("total replies: %lu (%lu pps) (%lu%%)\n", global_pkts_recv,
 		       global_pkts_recv * 1000 / (ctx.duration / 1000), global_pkts_recv * 100 / global_pkts_sent);
 		printf("average DNS reply size: %lu B\n", global_pkts_recv > 0 ? global_size_recv / global_pkts_recv : 0);
-		size_t bytes_recv = global_size_recv + (ctx.ipv6 ? KNOT_XDP_PAYLOAD_OFFSET6 : KNOT_XDP_PAYLOAD_OFFSET4) * global_pkts_recv;
+		size_t bytes_recv = global_size_recv + knot_xdp_payload_offset(ctx.ipv6) * global_pkts_recv;
 		printf("average Ethernet reply rate: %lu bps\n", bytes_recv * 8 * 1000 / (ctx.duration / 1000));
 		for (int i = 0; i < KNOWN_RCODE_MAX; i++) {
 			uint64_t rcode_count = 0;
