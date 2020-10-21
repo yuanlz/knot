@@ -19,6 +19,7 @@
 #include <linux/if_ether.h>
 #include <linux/ip.h>
 #include <linux/ipv6.h>
+#include <linux/tcp.h>
 #include <linux/udp.h>
 #include <stddef.h>
 #include <stdlib.h>
@@ -574,45 +575,83 @@ int knot_xdp_send_finish(knot_xdp_socket_t *socket)
 static void rx_desc(knot_xdp_socket_t *socket, const struct xdp_desc *desc,
                     knot_xdp_msg_t *msg)
 {
-	uint8_t *uframe_p = socket->umem->frames->bytes + desc->addr;
+	uint8_t *uframe_p = socket->umem->frames->bytes + desc->addr, proto;
 	const struct ethhdr *eth = (struct ethhdr *)uframe_p;
 	const struct iphdr *ip4 = NULL;
 	const struct ipv6hdr *ip6 = NULL;
-	const struct udphdr *udp = NULL;
+	void *next_hdr = uframe_p + sizeof(struct ethhdr);
+	uint16_t pay_len;
+
+	msg->flags = 0;
 
 	switch (eth->h_proto) {
 	case __constant_htons(ETH_P_IP):
-		ip4 = (struct iphdr *)(uframe_p + sizeof(struct ethhdr));
+		ip4 = next_hdr;
 		// Next conditions are ensured by the BPF filter.
 		assert(ip4->version == 4);
 		assert(ip4->frag_off == 0 ||
 		       ip4->frag_off == __constant_htons(IP_DF));
-		assert(ip4->protocol == IPPROTO_UDP);
+		proto = ip4->protocol;
 		// IPv4 header checksum is not verified!
-		udp = (struct udphdr *)(uframe_p + sizeof(struct ethhdr) +
-		                        ip4->ihl * 4);
+		pay_len = be16toh(ip4->tot_len) - ip4->ihl * 4;
+		next_hdr += ip4->ihl * 4;
 		break;
 	case __constant_htons(ETH_P_IPV6):
-		ip6 = (struct ipv6hdr *)(uframe_p + sizeof(struct ethhdr));
+		ip6 = next_hdr;
 		// Next conditions are ensured by the BPF filter.
 		assert(ip6->version == 6);
-		assert(ip6->nexthdr == IPPROTO_UDP);
-		udp = (struct udphdr *)(uframe_p + sizeof(struct ethhdr) +
-		                        sizeof(struct ipv6hdr));
+		proto = ip6->nexthdr;
+		pay_len = be16toh(ip6->payload_len);
+		next_hdr += sizeof(struct ipv6hdr);
+		msg->flags |= KNOT_XDP_IPV6;
 		break;
 	default:
 		assert(0);
 		msg->payload.iov_len = 0;
 		return;
 	}
-	// UDP checksum is not verified!
 
-	assert(eth && (!!ip4 != !!ip6) && udp);
+	const struct udphdr *udp = NULL;
+	const struct tcphdr *tcp = NULL;
+	uint16_t sport, dport;
 
-	// Process the packet; ownership is passed on, beware of holding frames.
+	switch (proto) {
+	case IPPROTO_UDP:
+		udp = next_hdr;
+		// UDP checksum is not verified!
+		assert(pay_len == be16toh(udp->len));
+		pay_len -= sizeof(struct udphdr);
+		next_hdr += sizeof(struct udphdr);
+		sport = udp->source;
+		dport = udp->dest;
+		break;
+	case IPPROTO_TCP:
+		tcp = next_hdr;
+		pay_len -= tcp->doff * 4;
+		next_hdr += tcp->doff * 4;
+		sport = tcp->source;
+		dport = tcp->dest;
+		msg->flags |= KNOT_XDP_TCP;
+		if (tcp->syn) {
+			msg->flags |= KNOT_XDP_SYN;
+		}
+		if (tcp->ack) {
+			msg->flags |= KNOT_XDP_ACK;
+		}
+		if (tcp->fin) {
+			msg->flags |= KNOT_XDP_FIN;
+		}
+		break;
+	default:
+		assert(0);
+		msg->payload.iov_len = 0;
+		return;
+	}
 
-	msg->payload.iov_base = (uint8_t *)udp + sizeof(struct udphdr);
-	msg->payload.iov_len = be16toh(udp->len) - sizeof(struct udphdr);
+	assert(eth && (!!ip4 != !!ip6) && (!!udp != !!tcp));
+
+	msg->payload.iov_base = next_hdr;
+	msg->payload.iov_len = pay_len;
 
 	msg->eth_from = (void *)&eth->h_source;
 	msg->eth_to = (void *)&eth->h_dest;
@@ -622,8 +661,8 @@ static void rx_desc(knot_xdp_socket_t *socket, const struct xdp_desc *desc,
 		struct sockaddr_in *dst_v4 = (struct sockaddr_in *)&msg->ip_to;
 		memcpy(&src_v4->sin_addr, &ip4->saddr, sizeof(src_v4->sin_addr));
 		memcpy(&dst_v4->sin_addr, &ip4->daddr, sizeof(dst_v4->sin_addr));
-		src_v4->sin_port = udp->source;
-		dst_v4->sin_port = udp->dest;
+		src_v4->sin_port = sport;
+		dst_v4->sin_port = dport;
 		src_v4->sin_family = AF_INET;
 		dst_v4->sin_family = AF_INET;
 	} else {
@@ -632,8 +671,8 @@ static void rx_desc(knot_xdp_socket_t *socket, const struct xdp_desc *desc,
 		struct sockaddr_in6 *dst_v6 = (struct sockaddr_in6 *)&msg->ip_to;
 		memcpy(&src_v6->sin6_addr, &ip6->saddr, sizeof(src_v6->sin6_addr));
 		memcpy(&dst_v6->sin6_addr, &ip6->daddr, sizeof(dst_v6->sin6_addr));
-		src_v6->sin6_port = udp->source;
-		dst_v6->sin6_port = udp->dest;
+		src_v6->sin6_port = sport;
+		dst_v6->sin6_port = dport;
 		src_v6->sin6_family = AF_INET6;
 		dst_v6->sin6_family = AF_INET6;
 		// Flow label is ignored.

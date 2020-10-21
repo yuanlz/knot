@@ -27,6 +27,14 @@
 #define KNOT_XDP_AVAILABLE	1
 #endif
 
+typedef enum {
+	KNOT_XDP_IPV6   = (1 << 0), /*!< This packet is a IPv6 (IPv4 otherwise). */
+	KNOT_XDP_TCP    = (1 << 1), /*!< This packet is a TCP (UDP otherwise). */
+	KNOT_XDP_SYN    = (1 << 2), /*!< SYN flag set (TCP only). */
+	KNOT_XDP_ACK    = (1 << 3), /*!< ACK flag set (TCP only). */
+	KNOT_XDP_FIN    = (1 << 4), /*!< FIN flag set (TCP only). */
+} knot_xdp_flags_t;
+
 /*! \brief A packet with src & dst MAC & IP addrs + UDP payload. */
 typedef struct knot_xdp_msg knot_xdp_msg_t;
 struct knot_xdp_msg {
@@ -34,6 +42,7 @@ struct knot_xdp_msg {
 	struct sockaddr_in6 ip_to;
 	uint8_t *eth_from;
 	uint8_t *eth_to;
+	knot_xdp_flags_t flags;
 	struct iovec payload;
 };
 
