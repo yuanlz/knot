@@ -43,6 +43,8 @@ struct knot_xdp_msg {
 	uint8_t *eth_from;
 	uint8_t *eth_to;
 	knot_xdp_flags_t flags;
+	uint32_t seqno;
+	uint32_t ackno;
 	struct iovec payload;
 };
 
@@ -67,9 +69,9 @@ typedef struct knot_xdp_socket knot_xdp_socket_t;
 /*!
  * \brief Return the offset of DNS payload inside the ethernet frame.
  *
- * \param ipv6    It's a IPv6 packet (IPv4 otherwise).
+ * \param flags    XDP message flags.
  */
-size_t knot_xdp_payload_offset(bool ipv6);
+size_t knot_xdp_payload_offset(knot_xdp_flags_t flags);
 
 /*!
  * \brief Initialize XDP socket.
@@ -112,13 +114,13 @@ void knot_xdp_send_prepare(knot_xdp_socket_t *socket);
  * \brief Allocate one buffer for an outgoing packet.
  *
  * \param socket       XDP socket.
- * \param ipv6         The packet will use IPv6 (IPv4 otherwise).
+ * \param flags        XDP message flags.
  * \param out          Out: the allocated packet buffer.
  * \param in_reply_to  Optional: fill in addresses from this query.
  *
  * \return KNOT_E*
  */
-int knot_xdp_send_alloc(knot_xdp_socket_t *socket, bool ipv6, knot_xdp_msg_t *out,
+int knot_xdp_send_alloc(knot_xdp_socket_t *socket, knot_xdp_flags_t flags, knot_xdp_msg_t *out,
                         const knot_xdp_msg_t *in_reply_to);
 
 /*!

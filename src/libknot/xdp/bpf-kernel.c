@@ -114,6 +114,22 @@ int xdp_redirect_udp_func(struct xdp_md *ctx)
 		return XDP_PASS;
 	}
 
+	/* Get the queue options. */
+	int index = ctx->rx_queue_index;
+	int *qidconf = bpf_map_lookup_elem(&qidconf_map, &index);
+	if (!qidconf) {
+		return XDP_ABORTED;
+	}
+	__u32 port_info = *qidconf;
+
+	// FIXME: another flag for TCP listening
+	if ((port_info & KNOT_XDP_LISTEN_PORT_ALL) && ip_proto == IPPROTO_TCP) {
+		if (fragmented) {
+			return XDP_PASS;
+		}
+		return bpf_redirect_map(&xsks_map, index, 0);
+	}
+
 	/* Treat UDP only. */
 	if (ip_proto != IPPROTO_UDP) {
 		return XDP_PASS;
@@ -129,15 +145,7 @@ int xdp_redirect_udp_func(struct xdp_md *ctx)
 		return XDP_DROP;
 	}
 
-	/* Get the queue options. */
-	int index = ctx->rx_queue_index;
-	int *qidconf = bpf_map_lookup_elem(&qidconf_map, &index);
-	if (!qidconf) {
-		return XDP_ABORTED;
-	}
-
 	/* Treat specified destination ports only. */
-	__u32 port_info = *qidconf;
 	switch (port_info & KNOT_XDP_LISTEN_PORT_MASK) {
 	case KNOT_XDP_LISTEN_PORT_DROP:
 		return XDP_DROP;

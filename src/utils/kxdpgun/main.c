@@ -126,18 +126,34 @@ static void next_payload(struct pkt_payload **payload, int increment)
 	}
 }
 
-static int alloc_pkts(knot_xdp_msg_t *pkts, int npkts, struct knot_xdp_socket *xsk,
-                      xdp_gun_ctx_t *ctx, uint64_t tick, struct pkt_payload **payl)
+static void insert_payload(knot_xdp_msg_t *pkt, xdp_gun_ctx_t *ctx, struct pkt_payload **payl)
 {
-	uint64_t unique = (tick * ctx->n_threads + ctx->thread_id) * ctx->at_once;
+	memcpy(pkt->payload.iov_base, (*payl)->payload, (*payl)->len);
+	pkt->payload.iov_len = (*payl)->len;
 
+	*(uint16_t *)(pkt->payload.iov_base + 0) = TRANSACTION_ID;
+
+	next_payload(payl, ctx->n_threads);
+}
+
+static void insert_payload_multi(knot_xdp_msg_t *pkts, int npkts,
+                                 xdp_gun_ctx_t *ctx, struct pkt_payload **payl)
+{
+	for (int i = 0; i < npkts; i++) {
+		insert_payload(&pkts[i], ctx, payl);
+	}
+}
+
+static int alloc_pkts(knot_xdp_msg_t *pkts, int npkts, struct knot_xdp_socket *xsk,
+                      xdp_gun_ctx_t *ctx, uint64_t *tick)
+{
 	for (int i = 0; i < npkts; i++) {
 		int ret = knot_xdp_send_alloc(xsk, ctx->ipv6, &pkts[i], NULL);
 		if (ret != KNOT_EOK) {
 			return ret;
 		}
 
-		uint16_t local_port = LOCAL_PORT_MIN + unique % (LOCAL_PORT_MAX + 1 - LOCAL_PORT_MIN);
+		uint16_t local_port = LOCAL_PORT_MIN + *tick % (LOCAL_PORT_MAX + 1 - LOCAL_PORT_MIN);
 		if (ctx->ipv6) {
 			set_sockaddr6(&pkts[i].ip_from, &ctx->local_ipv6, local_port);
 			set_sockaddr6(&pkts[i].ip_to, &ctx->target_ipv6, ctx->target_port);
@@ -149,13 +165,9 @@ static int alloc_pkts(knot_xdp_msg_t *pkts, int npkts, struct knot_xdp_socket *x
 		memcpy(pkts[i].eth_from, ctx->local_mac, 6);
 		memcpy(pkts[i].eth_to, ctx->target_mac, 6);
 
-		memcpy(pkts[i].payload.iov_base, (*payl)->payload, (*payl)->len);
-		pkts[i].payload.iov_len = (*payl)->len;
+		pkts[i].payload.iov_len = 0;
 
-		*(uint16_t *)(pkts[i].payload.iov_base + 0) = TRANSACTION_ID;
-
-		unique++;
-		next_payload(payl, ctx->n_threads);
+		*tick += ctx->n_threads;
 	}
 	return KNOT_EOK;
 }
@@ -184,7 +196,7 @@ void *xdp_gun_thread(void *_ctx)
 		usleep(1000);
 	}
 
-	uint64_t tick = 0;
+	uint64_t tick = ctx->thread_id;
 	struct pkt_payload *payload_ptr = NULL;
 	next_payload(&payload_ptr, ctx->thread_id);
 
@@ -196,12 +208,13 @@ void *xdp_gun_thread(void *_ctx)
 		if (duration < ctx->duration) {
 			while (1) {
 				knot_xdp_send_prepare(xsk);
-				ret = alloc_pkts(pkts, ctx->at_once, xsk, ctx,
-				                 tick, &payload_ptr);
+				ret = alloc_pkts(pkts, ctx->at_once, xsk, ctx,&tick);
 				if (ret != KNOT_EOK) {
 					errors++;
 					break;
 				}
+
+				insert_payload_multi(pkts, ctx->at_once, ctx, &payload_ptr);
 
 				uint32_t really_sent = 0;
 				ret = knot_xdp_send(xsk, pkts, ctx->at_once,
@@ -264,7 +277,6 @@ void *xdp_gun_thread(void *_ctx)
 		if (duration > ctx->duration) {
 			usleep(1000);
 		}
-		tick++;
 	}
 
 	knot_xdp_deinit(xsk);

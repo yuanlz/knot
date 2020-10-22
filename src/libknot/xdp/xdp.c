@@ -83,6 +83,30 @@ struct udpv6 {
 	};
 };
 
+struct tcpv4 {
+	union {
+		uint8_t bytes[1];
+		struct {
+			struct ethhdr eth; // No VLAN support; CRC at the "end" of .data!
+			struct iphdr ipv4;
+			struct tcphdr tcp;
+			uint8_t data[];
+		} __attribute__((packed));
+	};
+};
+
+struct tcpv6 {
+	union {
+		uint8_t bytes[1];
+		struct {
+			struct ethhdr eth; // No VLAN support; CRC at the "end" of .data!
+			struct ipv6hdr ipv6;
+			struct tcphdr tcp;
+			uint8_t data[];
+		} __attribute__((packed));
+	};
+};
+
 /*! \brief The memory layout of each umem frame. */
 struct umem_frame {
 	union {
@@ -90,21 +114,17 @@ struct umem_frame {
 		union {
 			struct udpv4 udpv4;
 			struct udpv6 udpv6;
+			struct tcpv4 tcpv4;
+			struct tcpv6 tcpv6;
 		};
 	};
 };
 
 _public_
-size_t knot_xdp_payload_offset(bool ipv6) {
+size_t knot_xdp_payload_offset(knot_xdp_flags_t flags) {
 	return sizeof(struct ethhdr) +
-	       (ipv6 ? sizeof(struct ipv6hdr) : sizeof(struct iphdr)) +
-	       sizeof(struct udphdr);
-}
-
-static bool is_ipv6(uint8_t *uframe_p)
-{
-	const struct ethhdr *eth = (struct ethhdr *)uframe_p;
-	return eth->h_proto == __constant_htons(ETH_P_IPV6);
+	       ((flags & KNOT_XDP_IPV6) ? sizeof(struct ipv6hdr) : sizeof(struct iphdr)) +
+	       ((flags & KNOT_XDP_TCP) ? sizeof(struct tcphdr) : sizeof(struct udphdr)); // we don't do TCP options !!
 }
 
 static int configure_xsk_umem(struct kxsk_umem **out_umem)
@@ -308,15 +328,23 @@ static struct umem_frame *alloc_tx_frame(struct kxsk_umem *umem)
 	return umem->frames + index;
 }
 
+static uint32_t rnd_uint32(void)
+{
+	uint32_t res = rand() & 0xffff;
+	res <<= 16;
+	res |= rand() & 0xffff;
+	return res;
+}
+
 _public_
-int knot_xdp_send_alloc(knot_xdp_socket_t *socket, bool ipv6, knot_xdp_msg_t *out,
+int knot_xdp_send_alloc(knot_xdp_socket_t *socket, knot_xdp_flags_t flags, knot_xdp_msg_t *out,
                         const knot_xdp_msg_t *in_reply_to)
 {
 	if (socket == NULL || out == NULL) {
 		return KNOT_EINVAL;
 	}
 
-	size_t ofs = knot_xdp_payload_offset(ipv6);
+	size_t ofs = knot_xdp_payload_offset(flags);
 
 	struct umem_frame *uframe = alloc_tx_frame(socket->umem);
 	if (uframe == NULL) {
@@ -325,7 +353,20 @@ int knot_xdp_send_alloc(knot_xdp_socket_t *socket, bool ipv6, knot_xdp_msg_t *ou
 
 	memset(out, 0, sizeof(*out));
 
-	out->payload.iov_base = ipv6 ? uframe->udpv6.data : uframe->udpv4.data;
+	// TODO substitute this tripple `if` with knot_xdp_payload_offset()
+	if (flags & KNOT_XDP_IPV6) {
+		if (flags & KNOT_XDP_TCP) {
+			out->payload.iov_base = uframe->tcpv6.data;
+		} else {
+			out->payload.iov_base = uframe->udpv6.data;
+		}
+	} else {
+		if (flags & KNOT_XDP_TCP) {
+			out->payload.iov_base = uframe->tcpv4.data;
+		} else {
+			out->payload.iov_base = uframe->udpv4.data;
+		}
+	}
 	out->payload.iov_len = MIN(UINT16_MAX, FRAME_SIZE - ofs);
 
 	const struct ethhdr *eth = (struct ethhdr *)uframe;
@@ -338,6 +379,24 @@ int knot_xdp_send_alloc(knot_xdp_socket_t *socket, bool ipv6, knot_xdp_msg_t *ou
 
 		memcpy(&out->ip_from, &in_reply_to->ip_to, sizeof(out->ip_from));
 		memcpy(&out->ip_to, &in_reply_to->ip_from, sizeof(out->ip_to));
+
+		if (flags & KNOT_XDP_TCP) {
+			assert(in_reply_to->flags & KNOT_XDP_TCP);
+			out->ackno = in_reply_to->seqno;
+			out->ackno += in_reply_to->payload.iov_len;
+			if (in_reply_to->flags & KNOT_XDP_SYN) {
+				out->ackno++;
+			}
+			out->seqno = in_reply_to->ackno;
+			if (out->seqno == 0) {
+				out->seqno = rnd_uint32();
+			}
+		}
+	} else {
+		if (flags & KNOT_XDP_TCP) {
+			out->ackno = 0;
+			out->seqno = rnd_uint32();
+		}
 	}
 
 	return KNOT_EOK;
@@ -396,16 +455,58 @@ static uint8_t *msg_uframe_ptr(knot_xdp_socket_t *socket, const knot_xdp_msg_t *
 	uint8_t *uframe_p = uNULL + ((msg->payload.iov_base - NULL) & ~(FRAME_SIZE - 1));
 
 #ifndef NDEBUG
-	intptr_t pd = (uint8_t *)msg->payload.iov_base - uframe_p
-	              - knot_xdp_payload_offset(is_ipv6(uframe_p));
-	/* This assertion might fire in some OK cases.  For example, the second branch
-	 * had to be added for cases with "emulated" AF_XDP support. */
-	assert(pd == XDP_PACKET_HEADROOM || pd == 0);
+	// Re-parse the uframe_p and check if the provided iov_base matches
+	uint8_t *frame = uframe_p, proto;
+	if (msg->payload.iov_base - (void *)frame > 256) {
+		frame += 256;
+	}
+	const struct ethhdr *eth = (struct ethhdr *)frame;
+	const struct iphdr *ip4 = NULL;
+	const struct ipv6hdr *ip6 = NULL;
+	const struct tcphdr *tcp = NULL;
+	void *next_hdr = frame + sizeof(struct ethhdr);
 
+	switch (eth->h_proto) {
+	case __constant_htons(ETH_P_IP):
+		ip4 = next_hdr;
+		proto = ip4->protocol;
+		next_hdr += ip4->ihl * 4;
+		break;
+	case __constant_htons(ETH_P_IPV6):
+		ip6 = next_hdr;
+		proto = ip6->nexthdr;
+		next_hdr += sizeof(struct ipv6hdr);
+		break;
+	case 0:
+		// FIXME WTF is this?
+		goto skip_check;
+	default:
+		assert(0);
+	}
+
+	switch (proto) {
+	case IPPROTO_UDP:
+		next_hdr += sizeof(struct udphdr);
+		break;
+	case IPPROTO_TCP:
+		tcp = next_hdr;
+		next_hdr += tcp->doff * 4;
+		break;
+	default:
+		assert(0);
+	}
+	assert(next_hdr == msg->payload.iov_base);
+skip_check:
+	;
+#endif
+
+#ifndef NDEBUG
+	// now check if we are not outside of umem completely
 	const uint8_t *umem_mem_start = socket->umem->frames->bytes;
 	const uint8_t *umem_mem_end = umem_mem_start + FRAME_SIZE * UMEM_FRAME_COUNT;
 	assert(umem_mem_start <= uframe_p && uframe_p < umem_mem_end);
 #endif
+
 	return uframe_p;
 }
 
@@ -415,29 +516,47 @@ static void xsk_sendmsg_ipv4(knot_xdp_socket_t *socket, const knot_xdp_msg_t *ms
 	uint8_t *uframe_p = msg_uframe_ptr(socket, msg);
 	struct umem_frame *uframe = (struct umem_frame *)uframe_p;
 	struct udpv4 *h = &uframe->udpv4;
+	struct tcpv4 *ht = &uframe->tcpv4;
 
 	const struct sockaddr_in *src_v4 = (const struct sockaddr_in *)&msg->ip_from;
 	const struct sockaddr_in *dst_v4 = (const struct sockaddr_in *)&msg->ip_to;
-	const uint16_t udp_len = sizeof(h->udp) + msg->payload.iov_len;
+	const uint16_t pay_len = ((msg->flags & KNOT_XDP_TCP) ? sizeof (ht->tcp) : sizeof(h->udp)) + msg->payload.iov_len;
 
 	h->eth.h_proto = __constant_htons(ETH_P_IP);
 
 	h->ipv4.version  = IPVERSION;
 	h->ipv4.ihl      = 5;
 	h->ipv4.tos      = 0;
-	h->ipv4.tot_len  = htobe16(5 * 4 + udp_len);
+	h->ipv4.tot_len  = htobe16(5 * 4 + pay_len);
 	h->ipv4.id       = 0;
 	h->ipv4.frag_off = 0;
 	h->ipv4.ttl      = IPDEFTTL;
-	h->ipv4.protocol = IPPROTO_UDP;
 	memcpy(&h->ipv4.saddr, &src_v4->sin_addr, sizeof(src_v4->sin_addr));
 	memcpy(&h->ipv4.daddr, &dst_v4->sin_addr, sizeof(dst_v4->sin_addr));
 	h->ipv4.check    = ipv4_checksum(h->bytes + sizeof(struct ethhdr));
 
-	h->udp.len    = htobe16(udp_len);
-	h->udp.source = src_v4->sin_port;
-	h->udp.dest   = dst_v4->sin_port;
-	h->udp.check  = 0; // Optional for IPv4 - not computed.
+	if (!(msg->flags & KNOT_XDP_TCP)) {
+		h->ipv4.protocol = IPPROTO_UDP;
+
+		h->udp.len    = htobe16(pay_len);
+		h->udp.source = src_v4->sin_port;
+		h->udp.dest   = dst_v4->sin_port;
+		h->udp.check  = 0; // Optional for IPv4 - not computed.
+	} else {
+		ht->ipv4.protocol = IPPROTO_TCP;
+
+		ht->tcp.source = src_v4->sin_port;
+		ht->tcp.dest   = dst_v4->sin_port;
+		ht->tcp.doff   = 5; // size of TCP hdr with no options in 32bit dwords
+
+		ht->tcp.seq = htobe32(msg->seqno);
+		ht->tcp.ack_seq = htobe32(msg->ackno);
+
+		ht->tcp.syn = ((msg->flags & KNOT_XDP_SYN) ? 1 : 0);
+		ht->tcp.ack = ((msg->flags & KNOT_XDP_ACK) ? 1 : 0);
+		ht->tcp.fin = ((msg->flags & KNOT_XDP_FIN) ? 1 : 0);
+		ht->tcp.psh = ((msg->payload.iov_len > 0) ? 1 : 0);
+	}
 
 	*xsk_ring_prod__tx_desc(&socket->tx, index) = (struct xdp_desc){
 		.addr = h->bytes - socket->umem->frames->bytes,
@@ -457,6 +576,8 @@ static void xsk_sendmsg_ipv6(knot_xdp_socket_t *socket, const knot_xdp_msg_t *ms
 	const uint16_t udp_len = sizeof(h->udp) + msg->payload.iov_len;
 
 	h->eth.h_proto = __constant_htons(ETH_P_IPV6);
+
+	assert(!(msg->flags & KNOT_XDP_TCP) && "FIXME implement");
 
 	h->ipv6.version     = 6;
 	h->ipv6.priority    = 0;
@@ -641,6 +762,8 @@ static void rx_desc(knot_xdp_socket_t *socket, const struct xdp_desc *desc,
 		if (tcp->fin) {
 			msg->flags |= KNOT_XDP_FIN;
 		}
+		msg->seqno = be32toh(tcp->seq);
+		msg->ackno = be32toh(tcp->ack_seq);
 		break;
 	default:
 		assert(0);
