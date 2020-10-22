@@ -373,6 +373,8 @@ int knot_xdp_send_alloc(knot_xdp_socket_t *socket, knot_xdp_flags_t flags, knot_
 	out->eth_from = (void *)&eth->h_source;
 	out->eth_to = (void *)&eth->h_dest;
 
+	out->flags = flags;
+
 	if (in_reply_to != NULL) {
 		memcpy(out->eth_from, in_reply_to->eth_to, ETH_ALEN);
 		memcpy(out->eth_to, in_reply_to->eth_from, ETH_ALEN);
@@ -556,11 +558,13 @@ static void xsk_sendmsg_ipv4(knot_xdp_socket_t *socket, const knot_xdp_msg_t *ms
 		ht->tcp.ack = ((msg->flags & KNOT_XDP_ACK) ? 1 : 0);
 		ht->tcp.fin = ((msg->flags & KNOT_XDP_FIN) ? 1 : 0);
 		ht->tcp.psh = ((msg->payload.iov_len > 0) ? 1 : 0);
+
+		ht->tcp.window = htobe16(MIN(UINT16_MAX, FRAME_SIZE - knot_xdp_payload_offset(msg->flags)));
 	}
 
 	*xsk_ring_prod__tx_desc(&socket->tx, index) = (struct xdp_desc){
 		.addr = h->bytes - socket->umem->frames->bytes,
-		.len = knot_xdp_payload_offset(false) + msg->payload.iov_len
+		.len = knot_xdp_payload_offset(msg->flags) + msg->payload.iov_len
 	};
 }
 
@@ -614,6 +618,20 @@ static void xsk_sendmsg_ipv6(knot_xdp_socket_t *socket, const knot_xdp_msg_t *ms
 	};
 }
 
+static bool send_msg(const knot_xdp_msg_t *msg)
+{
+	if (msg->flags & KNOT_XDP_TCP) {
+		if (msg->flags & (KNOT_XDP_SYN | KNOT_XDP_ACK | KNOT_XDP_FIN)) {
+			return true;
+		}
+	}
+	return msg->payload.iov_len > 0;
+}
+
+static bool send_msg46(const knot_xdp_msg_t *msg, bool ipv6) {
+	return send_msg(msg) && ipv6 == ((msg->flags & KNOT_XDP_IPV6) ? true : false);
+}
+
 _public_
 int knot_xdp_send(knot_xdp_socket_t *socket, const knot_xdp_msg_t msgs[],
                   uint32_t count, uint32_t *sent)
@@ -635,9 +653,9 @@ int knot_xdp_send(knot_xdp_socket_t *socket, const knot_xdp_msg_t msgs[],
 	for (uint32_t i = 0; i < count; ++i) {
 		const knot_xdp_msg_t *msg = &msgs[i];
 
-		if (msg->payload.iov_len && msg->ip_from.sin6_family == AF_INET) {
+		if (send_msg46(msg, false)) {
 			xsk_sendmsg_ipv4(socket, msg, idx++);
-		} else if (msg->payload.iov_len && msg->ip_from.sin6_family == AF_INET6) {
+		} else if (send_msg46(msg, true)) {
 			xsk_sendmsg_ipv6(socket, msg, idx++);
 		} else {
 			/* Some problem; we just ignore this message. */

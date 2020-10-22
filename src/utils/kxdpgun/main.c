@@ -67,6 +67,7 @@ typedef struct {
 	struct in_addr	local_ipv4, target_ipv4;
 	struct in6_addr	local_ipv6, target_ipv6;
 	bool		ipv6;
+	bool		tcp;
 	uint16_t	target_port;
 	uint32_t	listen_port; // KNOT_XDP_LISTEN_PORT_ALL, KNOT_XDP_LISTEN_PORT_DROP
 	unsigned	n_threads, thread_id;
@@ -145,10 +146,12 @@ static void insert_payload_multi(knot_xdp_msg_t *pkts, int npkts,
 }
 
 static int alloc_pkts(knot_xdp_msg_t *pkts, int npkts, struct knot_xdp_socket *xsk,
-                      xdp_gun_ctx_t *ctx, uint64_t *tick)
+                      xdp_gun_ctx_t *ctx, knot_xdp_msg_t *orig_pkts, uint64_t *tick)
 {
 	for (int i = 0; i < npkts; i++) {
-		int ret = knot_xdp_send_alloc(xsk, ctx->ipv6, &pkts[i], NULL);
+		knot_xdp_flags_t fl = (ctx->ipv6 ? KNOT_XDP_IPV6 : 0) | (ctx->tcp ? KNOT_XDP_TCP : 0);
+
+		int ret = knot_xdp_send_alloc(xsk, fl, &pkts[i], orig_pkts == NULL ? NULL : &orig_pkts[i]);
 		if (ret != KNOT_EOK) {
 			return ret;
 		}
@@ -208,13 +211,19 @@ void *xdp_gun_thread(void *_ctx)
 		if (duration < ctx->duration) {
 			while (1) {
 				knot_xdp_send_prepare(xsk);
-				ret = alloc_pkts(pkts, ctx->at_once, xsk, ctx,&tick);
+				ret = alloc_pkts(pkts, ctx->at_once, xsk, ctx, NULL, &tick);
 				if (ret != KNOT_EOK) {
 					errors++;
 					break;
 				}
 
-				insert_payload_multi(pkts, ctx->at_once, ctx, &payload_ptr);
+				if (ctx->tcp) {
+					for (int i = 0; i < ctx->at_once; i++) {
+						pkts[i].flags |= KNOT_XDP_SYN;
+					}
+				} else {
+					insert_payload_multi(pkts, ctx->at_once, ctx, &payload_ptr);
+				}
 
 				uint32_t really_sent = 0;
 				ret = knot_xdp_send(xsk, pkts, ctx->at_once,
@@ -263,6 +272,39 @@ void *xdp_gun_thread(void *_ctx)
 					tot_size += pkts[i].payload.iov_len;
 					tot_recv++;
 				}
+
+				// re-sending part (TCP)
+				if (ctx->tcp && recvd > 0) {
+					knot_xdp_msg_t re_pkts[recvd * 2];
+
+					ret = alloc_pkts(re_pkts, recvd * 2, xsk, ctx, pkts, &tick);
+					if (ret != KNOT_EOK) {
+						errors++;
+						break;
+					}
+
+					for (int i = 0; i < recvd; i++) {
+						assert((re_pkts[i].flags & (KNOT_XDP_SYN | KNOT_XDP_ACK | KNOT_XDP_FIN)) == 0);
+						assert((re_pkts[i + recvd].flags & (KNOT_XDP_SYN | KNOT_XDP_ACK | KNOT_XDP_FIN)) == 0);
+						if ((pkts[i].flags & KNOT_XDP_SYN) && (pkts[i].flags & KNOT_XDP_ACK)) {
+							re_pkts[i].flags |= KNOT_XDP_ACK;
+							insert_payload(&re_pkts[i + recvd], ctx, &payload_ptr);
+						}
+						if (pkts[i].payload.iov_len > 0) {
+							re_pkts[i].flags |= KNOT_XDP_ACK;
+							re_pkts[i + recvd].flags |= KNOT_XDP_FIN;
+							re_pkts[i + recvd].flags |= KNOT_XDP_ACK;
+						}
+
+						uint32_t really_sent;
+						ret = knot_xdp_send(xsk, re_pkts, recvd * 2, &really_sent);
+						if (ret != KNOT_EOK) {
+							errors++;
+							break;
+						}
+					}
+				}
+
 				knot_xdp_recv_finish(xsk, pkts, recvd);
 				pfd.revents = 0;
 			}
@@ -526,7 +568,7 @@ static bool configure_target(char *target_str, xdp_gun_ctx_t *ctx)
 }
 
 static void print_help(void) {
-	printf("Usage: %s [-t duration] [-Q qps] [-b batch_size] [-r] [-p port] "
+	printf("Usage: %s [-t duration] [-Q qps] [-b batch_size] [-r] [-p port] [-T] "
 	       "[-F cpu_affinity] [-I interface] -i queries_file dest_ip\n", PROGRAM_NAME);
 }
 
@@ -540,6 +582,7 @@ static bool get_opts(int argc, char *argv[], xdp_gun_ctx_t *ctx)
 		{ "batch",     required_argument, NULL, 'b' },
 		{ "drop",      no_argument,       NULL, 'r' },
 		{ "port",      required_argument, NULL, 'p' },
+		{ "tcp",       no_argument,       NULL, 'T' },
 		{ "affinity",  required_argument, NULL, 'F' },
 		{ "interface", required_argument, NULL, 'I' },
 		{ "infile",    required_argument, NULL, 'i' },
@@ -549,7 +592,7 @@ static bool get_opts(int argc, char *argv[], xdp_gun_ctx_t *ctx)
 	int opt = 0, arg;
 	double argf;
 	char *argcp;
-	while ((opt = getopt_long(argc, argv, "hVt:Q:b:rp:F:I:i:", opts, NULL)) != -1) {
+	while ((opt = getopt_long(argc, argv, "hVt:Q:b:rp:TF:I:i:", opts, NULL)) != -1) {
 		switch (opt) {
 		case 'h':
 			print_help();
@@ -594,6 +637,9 @@ static bool get_opts(int argc, char *argv[], xdp_gun_ctx_t *ctx)
 			} else {
 				return false;
 			}
+			break;
+		case 'T':
+			ctx->tcp = true;
 			break;
 		case 'F':
 			if ((arg = atoi(optarg)) > 0) {
