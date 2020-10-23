@@ -124,7 +124,10 @@ int xdp_redirect_udp_func(struct xdp_md *ctx)
 
 	// FIXME: another flag for TCP listening
 	if ((port_info & KNOT_XDP_LISTEN_PORT_ALL) && ip_proto == IPPROTO_TCP) {
-		if (fragmented) {
+		if ((void *)udp + sizeof(*udp) > data_end) {
+			return XDP_DROP;
+		}
+		if (fragmented || __bpf_ntohs(udp->dest) < 1024) { // UDP and TCP headers start the same way: src+dst port
 			return XDP_PASS;
 		}
 		return bpf_redirect_map(&xsks_map, index, 0);

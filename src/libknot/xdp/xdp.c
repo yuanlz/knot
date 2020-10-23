@@ -386,7 +386,7 @@ int knot_xdp_send_alloc(knot_xdp_socket_t *socket, knot_xdp_flags_t flags, knot_
 			assert(in_reply_to->flags & KNOT_XDP_TCP);
 			out->ackno = in_reply_to->seqno;
 			out->ackno += in_reply_to->payload.iov_len;
-			if (in_reply_to->flags & KNOT_XDP_SYN) {
+			if (in_reply_to->flags & (KNOT_XDP_SYN | KNOT_XDP_FIN)) {
 				out->ackno++;
 			}
 			out->seqno = in_reply_to->ackno;
@@ -449,6 +449,14 @@ static void udp_checksum_finish(size_t *result)
 	if (*result != 0xffff) {
 		*result = ~*result;
 	}
+}
+
+static void tcp_checksum_finish(size_t *result)
+{
+	while (*result > 0xffff) {
+		*result = (*result & 0xffff) + (*result >> 16);
+	}
+	*result = ~*result;
 }
 
 static uint8_t *msg_uframe_ptr(knot_xdp_socket_t *socket, const knot_xdp_msg_t *msg)
@@ -560,6 +568,23 @@ static void xsk_sendmsg_ipv4(knot_xdp_socket_t *socket, const knot_xdp_msg_t *ms
 		ht->tcp.psh = ((msg->payload.iov_len > 0) ? 1 : 0);
 
 		ht->tcp.window = htobe16(MIN(UINT16_MAX, FRAME_SIZE - knot_xdp_payload_offset(msg->flags)));
+
+		size_t chk = 0;
+		udp_checksum_step(&chk, &ht->ipv4.saddr, sizeof(ht->ipv4.saddr));
+		udp_checksum_step(&chk, &ht->ipv4.daddr, sizeof(ht->ipv4.daddr));
+		__be16 tmp = htobe16(ht->ipv4.protocol);
+		udp_checksum_step(&chk, &tmp, sizeof(tmp));
+		tmp = htobe16(pay_len);
+		udp_checksum_step(&chk, &tmp, sizeof(tmp));
+		ht->tcp.check = 0;
+		udp_checksum_step(&chk, &ht->tcp, sizeof(ht->tcp));
+		size_t padded_len = msg->payload.iov_len;
+		if (padded_len & 1) {
+			((uint8_t *)msg->payload.iov_base)[padded_len++] = 0;
+		}
+		udp_checksum_step(&chk, msg->payload.iov_base, padded_len);
+		tcp_checksum_finish(&chk);
+		ht->tcp.check = chk;
 	}
 
 	*xsk_ring_prod__tx_desc(&socket->tx, index) = (struct xdp_desc){
