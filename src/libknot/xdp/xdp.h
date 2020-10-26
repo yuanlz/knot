@@ -22,20 +22,11 @@
 #include <netinet/in.h>
 
 #include "libknot/xdp/bpf-consts.h"
+#include "libknot/xdp/protocols.h"
 
 #ifdef ENABLE_XDP
 #define KNOT_XDP_AVAILABLE	1
 #endif
-
-/*! \brief A packet with src & dst MAC & IP addrs + UDP payload. */
-typedef struct knot_xdp_msg knot_xdp_msg_t;
-struct knot_xdp_msg {
-	struct sockaddr_in6 ip_from;
-	struct sockaddr_in6 ip_to;
-	uint8_t *eth_from;
-	uint8_t *eth_to;
-	struct iovec payload;
-};
 
 /*!
  * \brief Styles of loading BPF program.
@@ -54,10 +45,6 @@ typedef enum {
 
 /*! \brief Context structure for one XDP socket. */
 typedef struct knot_xdp_socket knot_xdp_socket_t;
-
-/*! \brief Offset of DNS payload inside ethernet frame (IPv4 and v6 variants). */
-extern const size_t KNOT_XDP_PAYLOAD_OFFSET4;
-extern const size_t KNOT_XDP_PAYLOAD_OFFSET6;
 
 /*!
  * \brief Initialize XDP socket.
@@ -102,12 +89,26 @@ void knot_xdp_send_prepare(knot_xdp_socket_t *socket);
  * \param socket       XDP socket.
  * \param ipv6         The packet will use IPv6 (IPv4 otherwise).
  * \param out          Out: the allocated packet buffer.
- * \param in_reply_to  Optional: fill in addresses from this query.
  *
  * \return KNOT_E*
  */
-int knot_xdp_send_alloc(knot_xdp_socket_t *socket, bool ipv6, knot_xdp_msg_t *out,
-                        const knot_xdp_msg_t *in_reply_to);
+int knot_xdp_send_alloc(knot_xdp_socket_t *socket, knot_xdp_flags_t flags, knot_xdp_msg_t *out);
+
+/*!
+ * \brief Allocate one buffer for a reply packet.
+ *
+ * \param socket       XDP socket.
+ * \param reply_to     The packet to be replied to.
+ * \param out          Out: the allocated packet buffer.
+ *
+ * \return KNOT_E*
+ */
+int knot_xdp_reply_alloc(knot_xdp_socket_t *socket, const knot_xdp_msg_t *reply_to, knot_xdp_msg_t *out);
+
+/*!
+ * \brief A pointer to first message header.
+ */
+uint8_t *knot_xdp_msg_start(const knot_xdp_msg_t *msg);
 
 /*!
  * \brief Send multiple packets thru XDP.
@@ -123,7 +124,7 @@ int knot_xdp_send_alloc(knot_xdp_socket_t *socket, bool ipv6, knot_xdp_msg_t *ou
  *
  * \return KNOT_E*
  */
-int knot_xdp_send(knot_xdp_socket_t *socket, const knot_xdp_msg_t msgs[],
+int knot_xdp_send(knot_xdp_socket_t *socket, knot_xdp_msg_t msgs[],
                   uint32_t count, uint32_t *sent);
 
 /*!

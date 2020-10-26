@@ -51,6 +51,7 @@ pthread_mutex_t global_mutex;
 uint64_t global_pkts_sent = 0;
 uint64_t global_pkts_recv = 0;
 uint64_t global_size_recv = 0;
+uint64_t global_bytes_recv = 0;
 unsigned global_cpu_aff_start = 0;
 unsigned global_cpu_aff_step = 1;
 
@@ -142,7 +143,7 @@ static int alloc_pkts(knot_xdp_msg_t *pkts, int npkts, struct knot_xdp_socket *x
 	uint64_t unique = (tick * ctx->n_threads + ctx->thread_id) * ctx->at_once;
 
 	for (int i = 0; i < npkts; i++) {
-		int ret = knot_xdp_send_alloc(xsk, ctx->ipv6, &pkts[i], NULL);
+		int ret = knot_xdp_send_alloc(xsk, ctx->ipv6 ? KNOT_XDP_IPV6 : 0, &pkts[i]);
 		if (ret != KNOT_EOK) {
 			return ret;
 		}
@@ -158,8 +159,8 @@ static int alloc_pkts(knot_xdp_msg_t *pkts, int npkts, struct knot_xdp_socket *x
 			set_sockaddr(&pkts[i].ip_to, &ctx->target_ipv4, ctx->target_port, 0);
 		}
 
-		memcpy(pkts[i].eth_from, ctx->local_mac, 6);
-		memcpy(pkts[i].eth_to, ctx->target_mac, 6);
+		memcpy(pkts[i].eth_from, ctx->local_mac, ETH_ALEN);
+		memcpy(pkts[i].eth_to, ctx->target_mac, ETH_ALEN);
 
 		memcpy(pkts[i].payload.iov_base, (*payl)->payload, (*payl)->len);
 		pkts[i].payload.iov_len = (*payl)->len;
@@ -178,7 +179,7 @@ void *xdp_gun_thread(void *_ctx)
 	struct knot_xdp_socket *xsk;
 	struct timespec timer;
 	knot_xdp_msg_t pkts[ctx->at_once];
-	uint64_t tot_sent = 0, tot_recv = 0, tot_size = 0, errors = 0;
+	uint64_t tot_sent = 0, tot_recv = 0, tot_size = 0, tot_bytes = 0, errors = 0;
 	uint64_t duration = 0;
 
 	knot_xdp_load_bpf_t mode = (ctx->thread_id == 0 ?
@@ -260,6 +261,7 @@ void *xdp_gun_thread(void *_ctx)
 					}
 					ctx->rcode_counts[((uint8_t *)pkts[i].payload.iov_base)[3] & 0xf]++;
 					tot_size += pkts[i].payload.iov_len;
+					tot_bytes += pkts[i].payload.iov_len + ((uint8_t *)pkts[i].payload.iov_base - knot_xdp_msg_start(&pkts[i]));
 					tot_recv++;
 				}
 				knot_xdp_recv_finish(xsk, pkts, recvd);
@@ -287,6 +289,7 @@ void *xdp_gun_thread(void *_ctx)
 	global_pkts_sent += tot_sent;
 	global_pkts_recv += tot_recv;
 	global_size_recv += tot_size;
+	global_bytes_recv += tot_bytes;
 	pthread_mutex_unlock(&global_mutex);
 
 	return NULL;
@@ -724,8 +727,7 @@ int main(int argc, char *argv[])
 		printf("total replies: %lu (%lu pps) (%lu%%)\n", global_pkts_recv,
 		       global_pkts_recv * 1000 / (ctx.duration / 1000), global_pkts_recv * 100 / global_pkts_sent);
 		printf("average DNS reply size: %lu B\n", global_pkts_recv > 0 ? global_size_recv / global_pkts_recv : 0);
-		size_t bytes_recv = global_size_recv + (ctx.ipv6 ? KNOT_XDP_PAYLOAD_OFFSET6 : KNOT_XDP_PAYLOAD_OFFSET4) * global_pkts_recv;
-		printf("average Ethernet reply rate: %lu bps\n", bytes_recv * 8 * 1000 / (ctx.duration / 1000));
+		printf("average Ethernet reply rate: %lu bps\n", global_bytes_recv * 8 * 1000 / (ctx.duration / 1000));
 		for (int i = 0; i < KNOWN_RCODE_MAX; i++) {
 			uint64_t rcode_count = 0;
 			for (size_t j = 0; j < ctx.n_threads; j++) {
