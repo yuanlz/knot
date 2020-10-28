@@ -415,7 +415,13 @@ int dnssec_sign_verify(dnssec_sign_ctx_t *ctx, bool sign_cmp, const dnssec_binar
 	assert(ctx->key->public_key);
 	result = gnutls_pubkey_verify_data2(ctx->key->public_key,
 					    ctx->sign_algorithm,
-					    0, &data, &raw);
+					    GNUTLS_VERIFY_ALLOW_BROKEN,
+					    &data, &raw);
+	/* _ALLOW_BROKEN: GnuTLS may be built to consider some algorithms insecure.
+		https://gnutls.org/manual/gnutls.html#Disabling-algorithms-and-protocols
+	 * For example, RSA_SHA1* on default Fedora 33.
+	 * Instead we have our own dnssec_algorithm_key_support() based on IETF RFCs.
+	 */
 	if (result == GNUTLS_E_PK_SIG_VERIFY_FAILED) {
 		return DNSSEC_INVALID_SIGNATURE;
 	} else if (result < 0) {

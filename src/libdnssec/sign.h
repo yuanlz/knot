@@ -107,6 +107,9 @@ int dnssec_sign_write(dnssec_sign_ctx_t *ctx, dnssec_sign_flags_t flags,
  * \return Error code.
  * \retval DNSSEC_EOK                Validation successful, valid signature.
  * \retval DNSSEC_INVALID_SIGNATURE  Validation successful, invalid signature.
+ *
+ * \note This disregards *gnutls's* notion of which algorithm are insecure.
+ *       (unless sign_cmp is requested)
  */
 int dnssec_sign_verify(dnssec_sign_ctx_t *ctx, bool sign_cmp,
                        const dnssec_binary_t *signature);
