@@ -55,7 +55,7 @@ uint64_t global_bytes_recv = 0;
 unsigned global_cpu_aff_start = 0;
 unsigned global_cpu_aff_step = 1;
 
-#define LOCAL_PORT_MIN  1024
+#define LOCAL_PORT_MIN  2000
 #define LOCAL_PORT_MAX 65535
 
 #define KNOWN_RCODE_MAX (KNOT_RCODE_NOTZONE + 1)
@@ -71,7 +71,7 @@ typedef struct {
 	bool		ipv6;
 	bool		tcp;
 	uint16_t	target_port;
-	uint32_t	listen_port; // KNOT_XDP_LISTEN_PORT_ALL, KNOT_XDP_LISTEN_PORT_DROP
+	uint32_t	listen_port; // KNOT_XDP_LISTEN_PORT_*
 	unsigned	n_threads, thread_id;
 	uint64_t	rcode_counts[KNOWN_RCODE_MAX];
 } xdp_gun_ctx_t;
@@ -82,7 +82,7 @@ const static xdp_gun_ctx_t ctx_defaults = {
 	.duration = 5000000UL, // usecs
 	.at_once = 10,
 	.target_port = 53,
-	.listen_port = KNOT_XDP_LISTEN_PORT_ALL,
+	.listen_port = KNOT_XDP_LISTEN_PORT_PASS | LOCAL_PORT_MIN,
 };
 
 inline static void timer_start(struct timespec *timesp)
@@ -147,7 +147,7 @@ static void insert_payload(knot_xdp_msg_t *pkt, xdp_gun_ctx_t *ctx, struct pkt_p
 
 	next_payload(payl, ctx->n_threads);
 }
- 
+
 static void insert_payload_multi(knot_xdp_msg_t *pkts, int npkts,
                                  xdp_gun_ctx_t *ctx, struct pkt_payload **payl)
 {
@@ -270,7 +270,7 @@ void *xdp_gun_thread(void *_ctx)
 		}
 
 		// receiving part
-		if (ctx->listen_port == KNOT_XDP_LISTEN_PORT_ALL) {
+		if (!(ctx->listen_port & KNOT_XDP_LISTEN_PORT_DROP)) {
 			while (1) {
 				ret = poll(&pfd, 1, 0);
 				if (ret < 0) {
@@ -700,7 +700,7 @@ static bool get_opts(int argc, char *argv[], xdp_gun_ctx_t *ctx)
 			}
 			break;
 		case 'r':
-			ctx->listen_port = KNOT_XDP_LISTEN_PORT_DROP;
+			ctx->listen_port |= KNOT_XDP_LISTEN_PORT_DROP;
 			break;
 		case 'p':
 			arg = atoi(optarg);
@@ -712,6 +712,7 @@ static bool get_opts(int argc, char *argv[], xdp_gun_ctx_t *ctx)
 			break;
 		case 'T':
 			ctx->tcp = true;
+			ctx->listen_port |= KNOT_XDP_LISTEN_PORT_TCP;
 			break;
 		case 'F':
 			if ((arg = atoi(optarg)) > 0) {
@@ -813,7 +814,7 @@ int main(int argc, char *argv[])
 	}
 	pthread_mutex_destroy(&global_mutex);
 	printf("total queries: %lu (%lu pps)\n", global_pkts_sent, global_pkts_sent * 1000 / (ctx.duration / 1000));
-	if (global_pkts_sent > 0 && ctx.listen_port != KNOT_XDP_LISTEN_PORT_DROP) {
+	if (global_pkts_sent > 0 && !(ctx.listen_port & KNOT_XDP_LISTEN_PORT_DROP)) {
 		printf("total replies: %lu (%lu pps) (%lu%%)\n", global_pkts_recv,
 		       global_pkts_recv * 1000 / (ctx.duration / 1000), global_pkts_recv * 100 / global_pkts_sent);
 		printf("average DNS reply size: %lu B\n", global_pkts_recv > 0 ? global_size_recv / global_pkts_recv : 0);
