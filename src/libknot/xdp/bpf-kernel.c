@@ -18,6 +18,7 @@
 #include <linux/in.h>
 #include <linux/ip.h>
 #include <linux/ipv6.h>
+#include <linux/tcp.h>
 #include <linux/udp.h>
 
 #include "bpf-consts.h"
@@ -61,6 +62,7 @@ int xdp_redirect_udp_func(struct xdp_md *ctx)
 	const struct iphdr *ip4;
 	const struct ipv6hdr *ip6;
 	const struct udphdr *udp;
+	const struct tcphdr *tcp;
 
 	__u8 ip_proto;
 	__u8 fragmented = 0;
@@ -124,10 +126,11 @@ int xdp_redirect_udp_func(struct xdp_md *ctx)
 
 	// FIXME: another flag for TCP listening
 	if ((port_info & KNOT_XDP_LISTEN_PORT_ALL) && ip_proto == IPPROTO_TCP) {
-		if ((void *)udp + sizeof(*udp) > data_end) {
+		tcp = (void *)udp;
+		if ((void *)tcp + sizeof(*tcp) > data_end) {
 			return XDP_DROP;
 		}
-		if (fragmented || __bpf_ntohs(udp->dest) < 1024) { // UDP and TCP headers start the same way: src+dst port
+		if (fragmented || __bpf_ntohs(tcp->dest) < 1024) {
 			return XDP_PASS;
 		}
 		return bpf_redirect_map(&xsks_map, index, 0);
