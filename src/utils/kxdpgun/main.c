@@ -69,6 +69,7 @@ typedef struct {
 	struct in6_addr	local_ipv6, target_ipv6;
 	uint8_t		local_ip_range;
 	bool		ipv6;
+	bool		tcp;
 	uint16_t	target_port;
 	uint32_t	listen_port; // KNOT_XDP_LISTEN_PORT_ALL, KNOT_XDP_LISTEN_PORT_DROP
 	unsigned	n_threads, thread_id;
@@ -137,24 +138,55 @@ static void next_payload(struct pkt_payload **payload, int increment)
 	}
 }
 
-static int alloc_pkts(knot_xdp_msg_t *pkts, int npkts, struct knot_xdp_socket *xsk,
-                      xdp_gun_ctx_t *ctx, uint64_t tick, struct pkt_payload **payl)
+static void insert_payload(knot_xdp_msg_t *pkt, xdp_gun_ctx_t *ctx, struct pkt_payload **payl)
 {
-	uint64_t unique = (tick * ctx->n_threads + ctx->thread_id) * ctx->at_once;
+	memcpy(pkt->payload.iov_base, (*payl)->payload, (*payl)->len);
+	pkt->payload.iov_len = (*payl)->len;
 
+	*(uint16_t *)(pkt->payload.iov_base + 0) = TRANSACTION_ID;
+
+	next_payload(payl, ctx->n_threads);
+}
+ 
+static void insert_payload_multi(knot_xdp_msg_t *pkts, int npkts,
+                                 xdp_gun_ctx_t *ctx, struct pkt_payload **payl)
+{
 	for (int i = 0; i < npkts; i++) {
-		int ret = knot_xdp_send_alloc(xsk, ctx->ipv6 ? KNOT_XDP_IPV6 : 0, &pkts[i]);
-		if (ret != KNOT_EOK) {
-			return ret;
+		insert_payload(&pkts[i], ctx, payl);
+	}
+}
+
+static int alloc_pkts(knot_xdp_msg_t *pkts, int npkts, struct knot_xdp_socket *xsk,
+                      xdp_gun_ctx_t *ctx, knot_xdp_msg_t *orig_pkts, uint64_t *tick)
+{
+	for (int i = 0; i < npkts; i++) {
+		knot_xdp_flags_t fl = (ctx->ipv6 ? KNOT_XDP_IPV6 : 0) | (ctx->tcp ? KNOT_XDP_TCP : 0);
+
+		if (orig_pkts == NULL) {
+			int ret = knot_xdp_send_alloc(xsk, fl, &pkts[i]);
+			if (ret != KNOT_EOK) {
+				return ret;
+			}
+		} else {
+			int ret = knot_xdp_reply_alloc(xsk, &orig_pkts[i], &pkts[i]);
+			if (ret != KNOT_EOK) {
+				return ret;
+			}
 		}
 
-		uint16_t local_port = LOCAL_PORT_MIN + unique % (LOCAL_PORT_MAX + 1 - LOCAL_PORT_MIN);
+		pkts[i].payload.iov_len = 0;
+
+		if (orig_pkts != NULL) {
+			continue;
+		}
+
+		uint16_t local_port = LOCAL_PORT_MIN + *tick % (LOCAL_PORT_MAX + 1 - LOCAL_PORT_MIN);
 		if (ctx->ipv6) {
-			uint64_t ip_incr = unique % (1 << (128 - ctx->local_ip_range));
+			uint64_t ip_incr = *tick % (1 << (128 - ctx->local_ip_range));
 			set_sockaddr6(&pkts[i].ip_from, &ctx->local_ipv6, local_port, ip_incr);
 			set_sockaddr6(&pkts[i].ip_to, &ctx->target_ipv6, ctx->target_port, 0);
 		} else {
-			uint64_t ip_incr = unique % (1 << (32 - ctx->local_ip_range));
+			uint64_t ip_incr = *tick % (1 << (32 - ctx->local_ip_range));
 			set_sockaddr(&pkts[i].ip_from, &ctx->local_ipv4, local_port, ip_incr);
 			set_sockaddr(&pkts[i].ip_to, &ctx->target_ipv4, ctx->target_port, 0);
 		}
@@ -162,13 +194,7 @@ static int alloc_pkts(knot_xdp_msg_t *pkts, int npkts, struct knot_xdp_socket *x
 		memcpy(pkts[i].eth_from, ctx->local_mac, ETH_ALEN);
 		memcpy(pkts[i].eth_to, ctx->target_mac, ETH_ALEN);
 
-		memcpy(pkts[i].payload.iov_base, (*payl)->payload, (*payl)->len);
-		pkts[i].payload.iov_len = (*payl)->len;
-
-		*(uint16_t *)(pkts[i].payload.iov_base + 0) = TRANSACTION_ID;
-
-		unique++;
-		next_payload(payl, ctx->n_threads);
+		*tick += ctx->n_threads;
 	}
 	return KNOT_EOK;
 }
@@ -197,7 +223,7 @@ void *xdp_gun_thread(void *_ctx)
 		usleep(1000);
 	}
 
-	uint64_t tick = 0;
+	uint64_t tick = ctx->thread_id;
 	struct pkt_payload *payload_ptr = NULL;
 	next_payload(&payload_ptr, ctx->thread_id);
 
@@ -209,11 +235,18 @@ void *xdp_gun_thread(void *_ctx)
 		if (duration < ctx->duration) {
 			while (1) {
 				knot_xdp_send_prepare(xsk);
-				ret = alloc_pkts(pkts, ctx->at_once, xsk, ctx,
-				                 tick, &payload_ptr);
+				ret = alloc_pkts(pkts, ctx->at_once, xsk, ctx, NULL, &tick);
 				if (ret != KNOT_EOK) {
 					errors++;
 					break;
+				}
+
+				if (ctx->tcp) {
+					for (int i = 0; i < ctx->at_once; i++) {
+						pkts[i].flags |= KNOT_XDP_SYN;
+					}
+				} else {
+					insert_payload_multi(pkts, ctx->at_once, ctx, &payload_ptr);
 				}
 
 				uint32_t really_sent = 0;
@@ -254,6 +287,9 @@ void *xdp_gun_thread(void *_ctx)
 					errors++;
 					break;
 				}
+				if (recvd == 0) {
+					break;
+				}
 				for (int i = 0; i < recvd; i++) {
 					if (pkts[i].payload.iov_len < KNOT_WIRE_HEADER_SIZE ||
 					    *(uint16_t *)(pkts[i].payload.iov_base + 0) != TRANSACTION_ID) {
@@ -263,6 +299,57 @@ void *xdp_gun_thread(void *_ctx)
 					tot_size += pkts[i].payload.iov_len;
 					tot_bytes += pkts[i].payload.iov_len + ((uint8_t *)pkts[i].payload.iov_base - knot_xdp_msg_start(&pkts[i]));
 					tot_recv++;
+				}
+
+				// re-sending part (TCP)
+				if (ctx->tcp && recvd > 0) {
+					knot_xdp_msg_t re_pkts[recvd * 2];
+
+					knot_xdp_send_prepare(xsk);
+					ret = alloc_pkts(re_pkts, recvd, xsk, ctx, pkts, &tick);
+					if (ret != KNOT_EOK) {
+						errors++;
+						break;
+					}
+					ret = alloc_pkts(re_pkts + recvd, recvd, xsk, ctx, pkts, &tick);
+					if (ret != KNOT_EOK) {
+						errors++;
+						break;
+					}
+
+					for (int i = 0; i < recvd; i++) {
+						assert((re_pkts[i].flags & (KNOT_XDP_SYN | KNOT_XDP_ACK | KNOT_XDP_FIN)) == 0);
+						assert((re_pkts[i + recvd].flags & (KNOT_XDP_SYN | KNOT_XDP_ACK | KNOT_XDP_FIN)) == 0);
+						assert(re_pkts[i].payload.iov_len == 0);
+						assert(re_pkts[i + recvd].payload.iov_len == 0);
+						// TODO consider RST flag
+						if ((pkts[i].flags & KNOT_XDP_SYN) && (pkts[i].flags & KNOT_XDP_ACK)) {
+							re_pkts[i].flags |= KNOT_XDP_ACK;
+							re_pkts[i + recvd].flags |= KNOT_XDP_ACK;
+							insert_payload(&re_pkts[i + recvd], ctx, &payload_ptr);
+						}
+						if (pkts[i].payload.iov_len > 0) {
+							re_pkts[i].flags |= KNOT_XDP_ACK;
+							re_pkts[i + recvd].flags |= KNOT_XDP_FIN;
+							re_pkts[i + recvd].flags |= KNOT_XDP_ACK;
+						}
+						if ((pkts[i].flags & KNOT_XDP_FIN) && (pkts[i].flags & KNOT_XDP_ACK)) {
+							re_pkts[i].flags |= KNOT_XDP_ACK;
+						}
+					}
+
+					uint32_t really_sent;
+					ret = knot_xdp_send(xsk, re_pkts, recvd * 2, &really_sent);
+					if (ret != KNOT_EOK) {
+						errors++;
+						break;
+					}
+
+					ret = knot_xdp_send_finish(xsk);
+					if (ret != KNOT_EOK) {
+						errors++;
+						break;
+					}
 				}
 				knot_xdp_recv_finish(xsk, pkts, recvd);
 				pfd.revents = 0;
@@ -278,7 +365,6 @@ void *xdp_gun_thread(void *_ctx)
 		if (duration > ctx->duration) {
 			usleep(1000);
 		}
-		tick++;
 	}
 
 	knot_xdp_deinit(xsk);
@@ -552,7 +638,7 @@ static bool configure_target(char *target_str, char *local_ip, xdp_gun_ctx_t *ct
 }
 
 static void print_help(void) {
-	printf("Usage: %s [-t duration] [-Q qps] [-b batch_size] [-r] [-p port] "
+	printf("Usage: %s [-t duration] [-Q qps] [-b batch_size] [-r] [-p port] [-T] "
 	       "[-F cpu_affinity] [-I interface] [-l local_ip] -i queries_file dest_ip\n",
 	       PROGRAM_NAME);
 }
@@ -567,6 +653,7 @@ static bool get_opts(int argc, char *argv[], xdp_gun_ctx_t *ctx)
 		{ "batch",     required_argument, NULL, 'b' },
 		{ "drop",      no_argument,       NULL, 'r' },
 		{ "port",      required_argument, NULL, 'p' },
+		{ "tcp",       no_argument,       NULL, 'T' },
 		{ "affinity",  required_argument, NULL, 'F' },
 		{ "interface", required_argument, NULL, 'I' },
 		{ "local",     required_argument, NULL, 'l' },
@@ -577,7 +664,7 @@ static bool get_opts(int argc, char *argv[], xdp_gun_ctx_t *ctx)
 	int opt = 0, arg;
 	double argf;
 	char *argcp, *local_ip = NULL;
-	while ((opt = getopt_long(argc, argv, "hVt:Q:b:rp:F:I:l:i:", opts, NULL)) != -1) {
+	while ((opt = getopt_long(argc, argv, "hVt:Q:b:rp:TF:I:l:i:", opts, NULL)) != -1) {
 		switch (opt) {
 		case 'h':
 			print_help();
@@ -622,6 +709,9 @@ static bool get_opts(int argc, char *argv[], xdp_gun_ctx_t *ctx)
 			} else {
 				return false;
 			}
+			break;
+		case 'T':
+			ctx->tcp = true;
 			break;
 		case 'F':
 			if ((arg = atoi(optarg)) > 0) {
