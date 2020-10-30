@@ -18,6 +18,7 @@
 #include "knot/ctl/commands.h"
 #include "knot/ctl/process.h"
 #include "libknot/error.h"
+#include "contrib/tolower.h"
 
 int ctl_process(knot_ctl_t *ctl, server_t *server)
 {
@@ -64,6 +65,12 @@ int ctl_process(knot_ctl_t *ctl, server_t *server)
 			return KNOT_EOF;
 		default:
 			assert(0);
+		}
+
+		if (args.data[KNOT_CTL_IDX_ZONE] != NULL) {
+			for (char *it = (char *)args.data[KNOT_CTL_IDX_ZONE]; *it != '\0'; ++it) {
+				*it = knot_tolower(*it);
+			}
 		}
 
 		const char *cmd_name = args.data[KNOT_CTL_IDX_CMD];
