@@ -328,6 +328,9 @@ void *xdp_gun_thread(void *_ctx)
 						assert((re_pkts[i].flags & KNOT_XDP_TCPFL) == 0);
 						assert((re_pkts[i + recvd].flags & KNOT_XDP_TCPFL) == 0);
 						assert(re_pkts[i].payload.iov_len == 0);
+						if (!(pkts[i].flags & KNOT_XDP_TCP)) {
+							continue;
+						}
 						assert(re_pkts[i + recvd].payload.iov_len == 0);
 						if (pkts[i].flags & KNOT_XDP_RST) {
 							tot_rst++;
