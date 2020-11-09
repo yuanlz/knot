@@ -17,7 +17,7 @@
 #
 
 
-KU_SCRIPT_VERSION="Knot DNS utility script, version 0.3"
+KU_SCRIPT_VERSION="Knot DNS utility script, version 0.3a"
 
 PATH=/bin:/usr/bin:/usr/local/bin:/sbin:/usr/sbin:/usr/local/sbin
 
@@ -159,7 +159,7 @@ ku_net_devs_info() {
 		ku_execute $ETHTOOL -n $DEV rx-flow-hash udp4
 		ku_execute $ETHTOOL -n $DEV rx-flow-hash udp6
 		ku_execute $ETHTOOL -S $DEV
-		[ $DEV = bond* ] && ku_execute $CAT $BONDINFO/$DEV
+		[[ $DEV = bond* ]] && ku_execute $CAT $BONDINFO/$DEV
 	done
 }
 
