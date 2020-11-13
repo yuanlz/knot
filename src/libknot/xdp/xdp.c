@@ -298,7 +298,7 @@ static uint8_t *uframe_start(void *uframe_inside, knot_xdp_socket_t *socket, con
 	uint8_t *uNULL = NULL;
 	uint8_t *res = uNULL + ((uframe_inside - NULL) & ~(FRAME_SIZE - 1));
 
-#ifdef NDEBUG
+#if 1
 	UNUSED(socket);
 	UNUSED(msg);
 #else
