@@ -46,6 +46,7 @@ static knotd_state_t queryacl_process(knotd_state_t state, knot_pkt_t *pkt,
 	if (ctx->allow_addr.count > 0) {
 		if (!knotd_conf_addr_range_match(&ctx->allow_addr, qdata->params->remote)) {
 			qdata->rcode = KNOT_RCODE_NOTAUTH;
+			qdata->rcode_ede = KNOT_EDNS_EDE_PROHIBITED;
 			return KNOTD_STATE_FAIL;
 		}
 	}
@@ -73,6 +74,7 @@ static knotd_state_t queryacl_process(knotd_state_t state, knot_pkt_t *pkt,
 
 		if (!knotd_conf_addr_range_match(&ctx->allow_iface, iface_ptr)) {
 			qdata->rcode = KNOT_RCODE_NOTAUTH;
+			qdata->rcode_ede = KNOT_EDNS_EDE_PROHIBITED;
 			return KNOTD_STATE_FAIL;
 		}
 	}

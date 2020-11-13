@@ -336,6 +336,7 @@ static int zone_refresh(zone_t *zone, ctl_args_t *args)
 		return KNOT_ENOTSUP;
 	}
 
+	zone->is_being_started = true;
 	schedule_trigger(zone, args, ZONE_EVENT_REFRESH, true);
 
 	return KNOT_EOK;
