@@ -76,16 +76,6 @@ typedef struct {
 knot_xdp_payload_t knot_xdp_read_all(knot_xdp_payload_t p, knot_xdp_msg_t *msg);
 
 /*!
- * \brief Prepare headers for outgoing packet.
- *
- * \param buf     Pointer to future ethernet frame of the msg.
- * \param flags   Basic properties of outgoing msg.
- *
- * \return Pointer where the DNS payload shall be inserted.
- */
-void *knot_xdp_reserve(void *buf, knot_xdp_flags_t flags);
-
-/*!
  * \brief Write outgoing packet's eth, IP and UDP/TCP headers.
  *
  * \warning Packet payload must be written beforehand, otherwise incorrect checksum.

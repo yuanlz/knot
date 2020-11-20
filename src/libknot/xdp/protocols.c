@@ -42,7 +42,7 @@
 	     if ((p).len < (minlen)) { (p).err = KNOT_EMALF; return (p); } \
 	} while (0)
 
-knot_xdp_payload_t knot_xdp_read_eth(knot_xdp_payload_t p, knot_xdp_msg_t *msg)
+static knot_xdp_payload_t read_eth(knot_xdp_payload_t p, knot_xdp_msg_t *msg)
 {
 	check_payload(p, KNOT_XDP_H_ETH, sizeof(struct ethhdr));
 
@@ -62,7 +62,7 @@ knot_xdp_payload_t knot_xdp_read_eth(knot_xdp_payload_t p, knot_xdp_msg_t *msg)
 	return res;
 }
 
-knot_xdp_payload_t knot_xdp_read_ipv4(knot_xdp_payload_t p, knot_xdp_msg_t *msg)
+static knot_xdp_payload_t read_ipv4(knot_xdp_payload_t p, knot_xdp_msg_t *msg)
 {
 	check_payload(p, KNOT_XDP_H_IPV4, sizeof(struct iphdr));
 
@@ -96,7 +96,7 @@ knot_xdp_payload_t knot_xdp_read_ipv4(knot_xdp_payload_t p, knot_xdp_msg_t *msg)
 	return res;
 }
 
-knot_xdp_payload_t knot_xdp_read_ipv6(knot_xdp_payload_t p, knot_xdp_msg_t *msg)
+static knot_xdp_payload_t read_ipv6(knot_xdp_payload_t p, knot_xdp_msg_t *msg)
 {
 	check_payload(p, KNOT_XDP_H_IPV6, sizeof(struct ipv6hdr));
 
@@ -129,7 +129,7 @@ knot_xdp_payload_t knot_xdp_read_ipv6(knot_xdp_payload_t p, knot_xdp_msg_t *msg)
 	return res;
 }
 
-knot_xdp_payload_t knot_xdp_read_udp(knot_xdp_payload_t p, knot_xdp_msg_t *msg)
+static knot_xdp_payload_t read_udp(knot_xdp_payload_t p, knot_xdp_msg_t *msg)
 {
 	check_payload(p, KNOT_XDP_H_UDP, sizeof(struct udphdr));
 
@@ -155,7 +155,7 @@ knot_xdp_payload_t knot_xdp_read_udp(knot_xdp_payload_t p, knot_xdp_msg_t *msg)
 	return res;
 }
 
-knot_xdp_payload_t knot_xdp_read_tcp(knot_xdp_payload_t p, knot_xdp_msg_t *msg)
+static knot_xdp_payload_t read_tcp(knot_xdp_payload_t p, knot_xdp_msg_t *msg)
 {
 	check_payload(p, KNOT_XDP_H_TCP, sizeof(struct tcphdr));
 
@@ -193,7 +193,7 @@ knot_xdp_payload_t knot_xdp_read_tcp(knot_xdp_payload_t p, knot_xdp_msg_t *msg)
 }
 
 // this function is based on the (FIXME!) assumption that a TCP packet contains one whole DNS msg
-knot_xdp_payload_t knot_xdp_read_payload(knot_xdp_payload_t p, knot_xdp_msg_t *msg)
+static knot_xdp_payload_t read_payload(knot_xdp_payload_t p, knot_xdp_msg_t *msg)
 {
 	UNUSED(msg);
 
@@ -224,24 +224,26 @@ knot_xdp_payload_t knot_xdp_read_payload(knot_xdp_payload_t p, knot_xdp_msg_t *m
 
 knot_xdp_payload_t knot_xdp_read_all(knot_xdp_payload_t p, knot_xdp_msg_t *msg)
 {
-	p = knot_xdp_read_eth(p, msg);
+	p = read_eth(p, msg);
+
 	switch (p.next_proto) {
 	case KNOT_XDP_H_IPV4:
-		p = knot_xdp_read_ipv4(p, msg);
+		p = read_ipv4(p, msg);
 		break;
 	case KNOT_XDP_H_IPV6:
-		p = knot_xdp_read_ipv6(p, msg);
+		p = read_ipv6(p, msg);
 		break;
 	default:
 		ret_err(p, KNOT_EMALF);
 	}
+
 	switch (p.next_proto) {
 	case KNOT_XDP_H_UDP:
-		p = knot_xdp_read_udp(p, msg);
+		p = read_udp(p, msg);
 		break;
 	case KNOT_XDP_H_TCP:
-		p = knot_xdp_read_tcp(p, msg);
-		p = knot_xdp_read_payload(p, msg);
+		p = read_tcp(p, msg);
+		p = read_payload(p, msg);
 		break;
 	default:
 		ret_err(p, KNOT_EMALF);
@@ -253,23 +255,23 @@ knot_xdp_payload_t knot_xdp_read_all(knot_xdp_payload_t p, knot_xdp_msg_t *msg)
 	return p;
 }
 
-inline static uint16_t flags_ip(knot_xdp_flags_t flags)
+static uint16_t flags_ip(knot_xdp_flags_t flags)
 {
 	return ((flags & KNOT_XDP_IPV6) ? KNOT_XDP_H_IPV6 : KNOT_XDP_H_IPV4);
 }
 
-inline static uint8_t flags_p(knot_xdp_flags_t flags)
+static uint8_t flags_p(knot_xdp_flags_t flags)
 {
 	return ((flags & KNOT_XDP_TCP) ? KNOT_XDP_H_TCP : KNOT_XDP_H_UDP);
 }
 
-void *knot_xdp_reserve_eth(void *buf, knot_xdp_flags_t flags)
+static void *reserve_eth(void *buf, knot_xdp_flags_t flags)
 {
 	struct ethhdr *eth = buf;
 	return eth + 1;
 }
 
-void *knot_xdp_reserve_ip(void *buf, knot_xdp_flags_t flags)
+static void *reserve_ip(void *buf, knot_xdp_flags_t flags)
 {
 	if (!(flags & KNOT_XDP_IPV6)) {
 		struct iphdr *ip4 = buf;
@@ -280,7 +282,7 @@ void *knot_xdp_reserve_ip(void *buf, knot_xdp_flags_t flags)
 	}
 }
 
-void *knot_xdp_reserve_p(void *buf, knot_xdp_flags_t flags)
+static void *reserve_p(void *buf, knot_xdp_flags_t flags)
 {
 	if (!(flags & KNOT_XDP_TCP)) {
 		return buf + sizeof(struct udphdr);
@@ -290,15 +292,23 @@ void *knot_xdp_reserve_p(void *buf, knot_xdp_flags_t flags)
 	}
 }
 
-void *knot_xdp_reserve(void *buf, knot_xdp_flags_t flags)
+/*!
+ * \brief Prepare headers for outgoing packet.
+ *
+ * \param buf     Pointer to future ethernet frame of the msg.
+ * \param flags   Basic properties of outgoing msg.
+ *
+ * \return Pointer where the DNS payload shall be inserted.
+ */
+static void *xdp_reserve(void *buf, knot_xdp_flags_t flags)
 {
-	buf = knot_xdp_reserve_eth(buf, flags);
-	buf = knot_xdp_reserve_ip(buf, flags);
-	buf = knot_xdp_reserve_p(buf, flags);
+	buf = reserve_eth(buf, flags);
+	buf = reserve_ip(buf, flags);
+	buf = reserve_p(buf, flags);
 	return buf;
 }
 
-knot_xdp_payload_t knot_xdp_write_eth(knot_xdp_payload_t p, const knot_xdp_msg_t *msg)
+static knot_xdp_payload_t write_eth(knot_xdp_payload_t p, const knot_xdp_msg_t *msg)
 {
 	struct ethhdr *eth = p.buf;
 
@@ -332,7 +342,7 @@ static uint16_t ipv4_checksum(const uint16_t *ipv4_hdr)
 	return ~from32to16(sum32);
 }
 
-knot_xdp_payload_t knot_xdp_write_ipv4(knot_xdp_payload_t p, const knot_xdp_msg_t *msg)
+static knot_xdp_payload_t write_ipv4(knot_xdp_payload_t p, const knot_xdp_msg_t *msg)
 {
 	struct iphdr *ip4 = p.buf;
 
@@ -360,7 +370,7 @@ knot_xdp_payload_t knot_xdp_write_ipv4(knot_xdp_payload_t p, const knot_xdp_msg_
 	return p;
 }
 
-knot_xdp_payload_t knot_xdp_write_ipv6(knot_xdp_payload_t p, const knot_xdp_msg_t *msg)
+static knot_xdp_payload_t write_ipv6(knot_xdp_payload_t p, const knot_xdp_msg_t *msg)
 {
 	struct ipv6hdr *ip6 = p.buf;
 
@@ -427,7 +437,7 @@ static void checksum_payload(uint32_t *result, void *payload, size_t paylen)
 	checksum(result, payload, paylen);
 }
 
-knot_xdp_payload_t knot_xdp_write_udp(knot_xdp_payload_t p, const knot_xdp_msg_t *msg)
+static knot_xdp_payload_t write_udp(knot_xdp_payload_t p, const knot_xdp_msg_t *msg)
 {
 	struct udphdr *udp = p.buf;
 
@@ -460,7 +470,7 @@ knot_xdp_payload_t knot_xdp_write_udp(knot_xdp_payload_t p, const knot_xdp_msg_t
 	return p;
 }
 
-knot_xdp_payload_t knot_xdp_write_tcp(knot_xdp_payload_t p, const knot_xdp_msg_t *msg)
+static knot_xdp_payload_t write_tcp(knot_xdp_payload_t p, const knot_xdp_msg_t *msg)
 {
 	struct tcphdr *tcp = p.buf;
 
@@ -506,7 +516,7 @@ knot_xdp_payload_t knot_xdp_write_tcp(knot_xdp_payload_t p, const knot_xdp_msg_t
 	return p;
 }
 
-knot_xdp_payload_t knot_xdp_write_payl(knot_xdp_payload_t p, const knot_xdp_msg_t *msg)
+static knot_xdp_payload_t write_payload(knot_xdp_payload_t p, const knot_xdp_msg_t *msg)
 {
 	if (msg != NULL && msg->payload.iov_len == 0) {
 		return p;
@@ -526,19 +536,19 @@ knot_xdp_payload_t knot_xdp_write_payl(knot_xdp_payload_t p, const knot_xdp_msg_
 
 int knot_xdp_write_all(knot_xdp_payload_t p, const knot_xdp_msg_t *msg)
 {
-	p = knot_xdp_write_eth(p, msg);
+	p = write_eth(p, msg);
 
 	if (!(msg->flags & KNOT_XDP_IPV6)) {
-		p = knot_xdp_write_ipv4(p, msg);
+		p = write_ipv4(p, msg);
 	} else {
-		p = knot_xdp_write_ipv6(p, msg);
+		p = write_ipv6(p, msg);
 	}
 
 	if (!(msg->flags & KNOT_XDP_TCP)) {
-		p = knot_xdp_write_udp(p, msg);
+		p = write_udp(p, msg);
 	} else {
-		p = knot_xdp_write_tcp(p, msg);
-		p = knot_xdp_write_payl(p, msg);
+		p = write_tcp(p, msg);
+		p = write_payload(p, msg);
 	}
 
 	if (p.err == KNOT_EOK && msg->payload.iov_len > 0) {
@@ -570,8 +580,8 @@ static uint32_t rnd_uint32(void)
 	return res;
 }
 
-static void knot_xdp_msg_init_base(knot_xdp_msg_t *msg, void *buf, size_t buf_size,
-                                   knot_xdp_flags_t flags, size_t headroom)
+static void msg_init_base(knot_xdp_msg_t *msg, void *buf, size_t buf_size,
+                          knot_xdp_flags_t flags, size_t headroom)
 {
 	memset(msg, 0, sizeof(*msg));
 
@@ -583,7 +593,7 @@ static void knot_xdp_msg_init_base(knot_xdp_msg_t *msg, void *buf, size_t buf_si
 	memcpy(msg->eth_from, eth->h_source, ETH_ALEN);
 	memcpy(msg->eth_to,   eth->h_dest,   ETH_ALEN);
 
-	msg->payload.iov_base = knot_xdp_reserve(buf + headroom, flags);
+	msg->payload.iov_base = xdp_reserve(buf + headroom, flags);
 	assert(buf_size >= msg->payload.iov_base - buf);
 	msg->payload.iov_len = buf_size - (msg->payload.iov_base - buf) - headroom;
 
@@ -592,7 +602,7 @@ static void knot_xdp_msg_init_base(knot_xdp_msg_t *msg, void *buf, size_t buf_si
 
 void knot_xdp_msg_init(knot_xdp_msg_t *msg, void *buf, size_t buf_size, knot_xdp_flags_t flags)
 {
-	knot_xdp_msg_init_base(msg, buf, buf_size, flags, 0);
+	msg_init_base(msg, buf, buf_size, flags, 0);
 
 	if (flags & KNOT_XDP_TCP) {
 		msg->ackno = 0;
@@ -602,7 +612,7 @@ void knot_xdp_msg_init(knot_xdp_msg_t *msg, void *buf, size_t buf_size, knot_xdp
 
 void knot_xdp_msg_answer(knot_xdp_msg_t *msg, void *buf, size_t buf_size, const knot_xdp_msg_t *from)
 {
-	knot_xdp_msg_init_base(msg, buf, buf_size, from->flags & (KNOT_XDP_IPV6 | KNOT_XDP_TCP), 0);
+	msg_init_base(msg, buf, buf_size, from->flags & (KNOT_XDP_IPV6 | KNOT_XDP_TCP), 0);
 
 	memcpy(msg->eth_from, from->eth_to, ETH_ALEN);
 	memcpy(msg->eth_to,   from->eth_from, ETH_ALEN);
