@@ -50,7 +50,10 @@ static int write_dnstap(dt_writer_t           *writer,
 		return KNOT_EOK;
 	}
 
-	net_set_local_info(net);
+	// Set local info once only if not explicitly specified.
+	if (net->local == NULL && net->local_info == NULL) {
+		net_set_local_info(net);
+	}
 
 	msg_type = is_query ? DNSTAP__MESSAGE__TYPE__TOOL_QUERY :
 	                      DNSTAP__MESSAGE__TYPE__TOOL_RESPONSE;

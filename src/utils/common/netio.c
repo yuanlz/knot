@@ -404,11 +404,6 @@ int net_set_local_info(net_t *net)
 		return KNOT_EINVAL;
 	}
 
-	if (net->local_info != NULL) {
-		free(net->local_info->ai_addr);
-		freeaddrinfo(net->local_info);
-	}
-
 	socklen_t local_addr_len = sizeof(struct sockaddr_storage);
 	struct sockaddr_storage *local_addr = calloc(1, local_addr_len);
 
@@ -643,7 +638,13 @@ void net_clean(net_t *net)
 	free(net->remote_str);
 
 	if (net->local_info != NULL) {
-		freeaddrinfo(net->local_info);
+		if (net->local == NULL) {
+			// Allocated by net_set_local_info().
+			free(net->local_info->ai_addr);
+			free(net->local_info);
+		} else {
+			freeaddrinfo(net->local_info);
+		}
 	}
 
 	if (net->remote_info != NULL) {
