@@ -46,8 +46,6 @@ static knot_xdp_payload_t read_eth(knot_xdp_payload_t p, knot_xdp_msg_t *msg)
 {
 	check_payload(p, KNOT_XDP_H_ETH, sizeof(struct ethhdr));
 
-	knot_xdp_payload_t res = { 0 };
-
 	const struct ethhdr *eth = p.buf;
 
 	if (msg != NULL) {
@@ -55,9 +53,11 @@ static knot_xdp_payload_t read_eth(knot_xdp_payload_t p, knot_xdp_msg_t *msg)
 		memcpy(msg->eth_to, eth->h_dest, ETH_ALEN);
 	}
 
-	res.next_proto = eth->h_proto;
-	res.buf = p.buf + sizeof(*eth);
-	res.len = p.len - sizeof(*eth);
+	knot_xdp_payload_t res = {
+		.next_proto = eth->h_proto,
+		.buf = p.buf + sizeof(*eth),
+		.len = p.len - sizeof(*eth),
+	};
 
 	return res;
 }
@@ -133,8 +133,6 @@ static knot_xdp_payload_t read_udp(knot_xdp_payload_t p, knot_xdp_msg_t *msg)
 {
 	check_payload(p, KNOT_XDP_H_UDP, sizeof(struct udphdr));
 
-	knot_xdp_payload_t res = { 0 };
-
 	const struct udphdr *udp = p.buf;
 
 	if (msg != NULL) {
@@ -148,9 +146,11 @@ static knot_xdp_payload_t read_udp(knot_xdp_payload_t p, knot_xdp_msg_t *msg)
 		msg->ip_to.sin6_port = udp->dest;
 	}
 
-	res.next_proto = KNOT_XDP_H_DNS_MSG;
-	res.buf = p.buf + sizeof(struct udphdr);
-	res.len = p.len - sizeof(struct udphdr);
+	knot_xdp_payload_t res = {
+		.next_proto = KNOT_XDP_H_DNS_MSG,
+		.buf = p.buf + sizeof(struct udphdr),
+		.len = p.len - sizeof(struct udphdr),
+	};
 
 	return res;
 }
@@ -158,8 +158,6 @@ static knot_xdp_payload_t read_udp(knot_xdp_payload_t p, knot_xdp_msg_t *msg)
 static knot_xdp_payload_t read_tcp(knot_xdp_payload_t p, knot_xdp_msg_t *msg)
 {
 	check_payload(p, KNOT_XDP_H_TCP, sizeof(struct tcphdr));
-
-	knot_xdp_payload_t res = { 0 };
 
 	const struct tcphdr *tcp = p.buf;
 
@@ -185,9 +183,11 @@ static knot_xdp_payload_t read_tcp(knot_xdp_payload_t p, knot_xdp_msg_t *msg)
 		msg->ip_to.sin6_port = tcp->dest;
 	}
 
-	res.next_proto = KNOT_XDP_H_DNS_PAYLOAD;
-	res.buf = p.buf + tcp->doff * 4;
-	res.len = p.len - tcp->doff * 4;
+	knot_xdp_payload_t res = {
+		.next_proto = KNOT_XDP_H_DNS_PAYLOAD,
+		.buf = p.buf + tcp->doff * 4,
+		.len = p.len - tcp->doff * 4,
+	};
 
 	return res;
 }
