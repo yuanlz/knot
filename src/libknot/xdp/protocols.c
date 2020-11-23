@@ -587,12 +587,6 @@ static void msg_init_base(knot_xdp_msg_t *msg, void *buf, size_t buf_size,
 
 	msg->flags = flags;
 
-	struct ethhdr *eth = buf + headroom;
-	assert(buf_size >= sizeof(*eth) + headroom);
-
-	memcpy(msg->eth_from, eth->h_source, ETH_ALEN);
-	memcpy(msg->eth_to,   eth->h_dest,   ETH_ALEN);
-
 	msg->payload.iov_base = xdp_reserve(buf + headroom, flags);
 	assert(buf_size >= msg->payload.iov_base - buf);
 	msg->payload.iov_len = buf_size - (msg->payload.iov_base - buf) - headroom;
@@ -603,6 +597,12 @@ static void msg_init_base(knot_xdp_msg_t *msg, void *buf, size_t buf_size,
 void knot_xdp_msg_init(knot_xdp_msg_t *msg, void *buf, size_t buf_size, knot_xdp_flags_t flags)
 {
 	msg_init_base(msg, buf, buf_size, flags, 0);
+
+	struct ethhdr *eth = buf + headroom;
+	assert(buf_size >= sizeof(*eth) + headroom);
+
+	memcpy(msg->eth_from, eth->h_source, ETH_ALEN);
+	memcpy(msg->eth_to,   eth->h_dest,   ETH_ALEN);
 
 	if (flags & KNOT_XDP_TCP) {
 		msg->ackno = 0;
