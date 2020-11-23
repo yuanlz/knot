@@ -534,8 +534,15 @@ static knot_xdp_payload_t write_payload(knot_xdp_payload_t p, const knot_xdp_msg
 	return p;
 }
 
-int knot_xdp_write_all(knot_xdp_payload_t p, const knot_xdp_msg_t *msg)
+int knot_xdp_write_all(const knot_xdp_msg_t *msg, uint8_t *frame, size_t frame_len)
 {
+	knot_xdp_payload_t p = {
+		.buf = frame,
+		.len = frame_len,
+		.err = KNOT_EOK,
+		.next_proto = KNOT_XDP_H_NONE,
+	};
+
 	p = write_eth(p, msg);
 
 	if (!(msg->flags & KNOT_XDP_IPV6)) {

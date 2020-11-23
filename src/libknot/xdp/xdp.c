@@ -368,13 +368,7 @@ int knot_xdp_send(knot_xdp_socket_t *socket, knot_xdp_msg_t msgs[],
 			uint8_t *uframe_p = msg_start(msg, socket, false);
 			size_t uframe_len = msg->payload.iov_len + ((uint8_t *)msg->payload.iov_base - uframe_p);
 
-			knot_xdp_payload_t p = {
-				.buf = uframe_p,
-				.len = uframe_len,
-				.err = ret,
-				.next_proto = KNOT_XDP_H_NONE,
-			};
-			ret = knot_xdp_write_all(p, msg);
+			ret = knot_xdp_write_all(msg, uframe_p, uframe_len);
 			if (ret == KNOT_EOK) {
 				*xsk_ring_prod__tx_desc(&socket->tx, idx++) = (struct xdp_desc) {
 					.addr = uframe_p - socket->umem->frames->bytes,

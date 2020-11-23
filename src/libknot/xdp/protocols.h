@@ -87,7 +87,7 @@ knot_xdp_payload_t knot_xdp_read_all(knot_xdp_payload_t p, knot_xdp_msg_t *msg);
  *
  * \return KNOT_E*
  */
-int knot_xdp_write_all(knot_xdp_payload_t p, const knot_xdp_msg_t *msg);
+int knot_xdp_write_all(const knot_xdp_msg_t *msg, uint8_t *frame, size_t frame_len);
 
 /*!
  * \brief If true, then this message is empty and shall not be sent.
