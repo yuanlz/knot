@@ -605,8 +605,8 @@ void knot_xdp_msg_init(knot_xdp_msg_t *msg, void *buf, size_t buf_size, knot_xdp
 {
 	msg_init_base(msg, buf, buf_size, flags, 0);
 
-	struct ethhdr *eth = buf + headroom;
-	assert(buf_size >= sizeof(*eth) + headroom);
+	struct ethhdr *eth = buf;
+	assert(buf_size >= sizeof(*eth));
 
 	memcpy(msg->eth_from, eth->h_source, ETH_ALEN);
 	memcpy(msg->eth_to,   eth->h_dest,   ETH_ALEN);
