@@ -3,19 +3,18 @@
 '''Test for AXFR from Knot to Knot'''
 
 from dnstest.test import Test
+import dnstest.keys
 
-t = Test()
+tsig=dnstest.keys.Tsig("key.", "hmac-sha224", "Zm9v")
+t = Test(tsig=tsig, stress=False, address="127.0.0.1")
 
-master = t.server("knot")
-slave = t.server("knot")
-zones = t.zone_rnd(10) + t.zone(".") + t.zone("records.")
-
-t.link(zones, master, slave)
+m1 = t.server("knot", address="127.0.0.1", port="5001")
+m2 = t.server("knot",  address="127.0.0.1", port="5002")
+zones = t.zone("x.", storage=".") + t.zone(".", storage=".")
+t.link(zones, m1)
+t.link(zones, m2)
 
 t.start()
-
-master.zones_wait(zones)
-slave.zones_wait(zones)
-t.xfr_diff(master, slave, zones)
-
+t.sleep(1)
+t.xfr_diff(m1, m2, zones)
 t.end()
