@@ -20,6 +20,7 @@
 #include <string.h>
 #include <sys/types.h>
 #include <sys/socket.h>
+#include <sys/epoll.h>
 #include <netinet/tcp.h>
 #include <netinet/in.h>
 #include <stdio.h>
@@ -49,7 +50,7 @@ typedef struct tcp_context {
 	unsigned client_threshold;       /*!< Index of first TCP client. */
 	struct timespec last_poll_time;  /*!< Time of the last socket poll. */
 	bool is_throttled;               /*!< TCP connections throttling switch. */
-	fdset_t set;                     /*!< Set of server/client sockets. */
+	efdset_t set;                    /*!< Set of server/client sockets. */
 	unsigned thread_id;              /*!< Thread identifier. */
 	unsigned max_worker_fds;         /*!< Max TCP clients per worker configuration + no. of ifaces. */
 	int idle_timeout;                /*!< [s] TCP idle timeout configuration. */
@@ -75,11 +76,11 @@ static void update_tcp_conf(tcp_context_t *tcp)
 }
 
 /*! \brief Sweep TCP connection. */
-static enum fdset_sweep_state tcp_sweep(fdset_t *set, int i, void *data)
+static enum fdset_sweep_state tcp_sweep(efdset_t *set, int i, void *data)
 {
 	UNUSED(data);
 	assert(set && i < set->n && i >= 0);
-	int fd = set->pfd[i].fd;
+	int fd = set->ev_data[i].fd;
 
 	/* Best-effort, name and shame. */
 	struct sockaddr_storage ss;
@@ -117,13 +118,12 @@ static void tcp_log_error(struct sockaddr_storage *ss, const char *operation, in
 }
 
 static unsigned tcp_set_ifaces(const iface_t *ifaces, size_t n_ifaces,
-                               fdset_t *fds, int thread_id)
+                               efdset_t *fds, int thread_id)
 {
 	if (n_ifaces == 0) {
 		return 0;
 	}
 
-	fdset_clear(fds);
 	for (const iface_t *i = ifaces; i != ifaces + n_ifaces; i++) {
 		if (i->fd_tcp_count == 0) { // Ignore XDP interface.
 			assert(i->fd_xdp_count > 0);
@@ -140,7 +140,7 @@ static unsigned tcp_set_ifaces(const iface_t *ifaces, size_t n_ifaces,
 			tcp_id = thread_id - i->fd_udp_count;
 		}
 #endif
-		fdset_add(fds, i->fd_tcp[tcp_id], POLLIN, NULL);
+		efdset_add(fds, i->fd_tcp[tcp_id], POLLIN, MASTER, NULL);
 	}
 
 	return fds->n;
@@ -213,31 +213,31 @@ static int tcp_handle(tcp_context_t *tcp, int fd, struct iovec *rx, struct iovec
 	return ret;
 }
 
-static void tcp_event_accept(tcp_context_t *tcp, unsigned i)
+static void tcp_event_accept(tcp_context_t *tcp, efdset_data_t *ctx)
 {
+	assert(tcp != NULL && ctx != NULL);
 	/* Accept client. */
-	int fd = tcp->set.pfd[i].fd;
-	int client = net_accept(fd, NULL);
+	int client = net_accept(ctx->fd, NULL);
 	if (client >= 0) {
 		/* Assign to fdset. */
-		int next_id = fdset_add(&tcp->set, client, POLLIN, NULL);
+		int next_id = efdset_add(&tcp->set, client, POLLIN, CLIENT, NULL);
 		if (next_id < 0) {
 			close(client);
 			return;
 		}
 
 		/* Update watchdog timer. */
-		fdset_set_watchdog(&tcp->set, next_id, tcp->idle_timeout);
+		//TODO
+		efdset_set_watchdog(&tcp->set, next_id, tcp->idle_timeout);
 	}
 }
 
-static int tcp_event_serve(tcp_context_t *tcp, unsigned i)
+static int tcp_event_serve(tcp_context_t *tcp, efdset_data_t *ctx)
 {
-	int fd = tcp->set.pfd[i].fd;
-	int ret = tcp_handle(tcp, fd, &tcp->iov[0], &tcp->iov[1]);
+	int ret = tcp_handle(tcp, ctx->fd, &tcp->iov[0], &tcp->iov[1]);
 	if (ret == KNOT_EOK) {
 		/* Update socket activity timer. */
-		fdset_set_watchdog(&tcp->set, i, tcp->idle_timeout);
+		efdset_set_watchdog(&tcp->set, ctx->fd, tcp->idle_timeout);
 	}
 
 	return ret;
@@ -245,37 +245,39 @@ static int tcp_event_serve(tcp_context_t *tcp, unsigned i)
 
 static void tcp_wait_for_events(tcp_context_t *tcp)
 {
-	fdset_t *set = &tcp->set;
+	efdset_t *set = &tcp->set;
 
 	/* Check if throttled with many open TCP connections. */
 	assert(set->n <= tcp->max_worker_fds);
 	tcp->is_throttled = set->n == tcp->max_worker_fds;
 
-	/* If throttled, temporarily ignore new TCP connections. */
-	unsigned i = tcp->is_throttled ? tcp->client_threshold : 0;
-
 	/* Wait for events. */
-	int nfds = poll(&(set->pfd[i]), set->n - i, TCP_SWEEP_INTERVAL * 1000);
+	struct epoll_event events[set->n];
+	int nfds = epoll_wait(set->epollfd, events, set->n, TCP_SWEEP_INTERVAL * 1000);
+	if (nfds < 0) {
+		assert(true);
+		//TODO
+	}
 
 	/* Mark the time of last poll call. */
 	tcp->last_poll_time = time_now();
 
 	/* Process events. */
-	while (nfds > 0 && i < set->n) {
+	for (struct epoll_event *it = events; nfds > 0; ++it) {
 		bool should_close = false;
-		if (set->pfd[i].revents & (POLLERR|POLLHUP|POLLNVAL)) {
-			should_close = (i >= tcp->client_threshold);
+		if (it->events & (POLLERR|POLLHUP|POLLNVAL)) {
+			should_close = (((struct epoll_usr_data *)it->data.ptr)->type == CLIENT);
 			--nfds;
-		} else if (set->pfd[i].revents & (POLLIN)) {
+		} else if (it->events & (POLLIN)) {
 			/* Master sockets - new connection to accept. */
-			if (i < tcp->client_threshold) {
+			if (((struct epoll_usr_data *)it->data.ptr)->type == MASTER && tcp->is_throttled == false) {
 				/* Don't accept more clients than configured. */
 				if (set->n < tcp->max_worker_fds) {
-					tcp_event_accept(tcp, i);
+					tcp_event_accept(tcp, it->data.ptr);
 				}
 			/* Client sockets - already accepted connection or
 			   closed connection :-( */
-			} else if (tcp_event_serve(tcp, i) != KNOT_EOK) {
+			} else if (tcp_event_serve(tcp, it->data.ptr) != KNOT_EOK) {
 				should_close = true;
 			}
 			--nfds;
@@ -283,10 +285,8 @@ static void tcp_wait_for_events(tcp_context_t *tcp)
 
 		/* Evaluate. */
 		if (should_close) {
-			close(set->pfd[i].fd);
-			fdset_remove(set, i);
-		} else {
-			++i;
+			close(it->data.fd);
+			efdset_remove(set, it->data.ptr);
 		}
 	}
 }
@@ -326,7 +326,7 @@ int tcp_master(dthread_t *thread)
 	knot_layer_init(&tcp.layer, &mm, process_query_layer());
 
 	/* Prepare initial buffer for listening and bound sockets. */
-	fdset_init(&tcp.set, FDSET_INIT_SIZE);
+	efdset_init(&tcp.set, FDSET_INIT_SIZE);
 
 	/* Create iovec abstraction. */
 	for (unsigned i = 0; i < 2; ++i) {
@@ -344,6 +344,7 @@ int tcp_master(dthread_t *thread)
 	update_tcp_conf(&tcp);
 
 	/* Set descriptors for the configured interfaces. */
+	//TODO find if client_treshold is referenced elsewhere (can be rewriten by tcp.fd_treshold)
 	tcp.client_threshold = tcp_set_ifaces(handler->server->ifaces,
 	                                      handler->server->n_ifaces,
 	                                      &tcp.set, thread_id);
@@ -362,7 +363,7 @@ int tcp_master(dthread_t *thread)
 
 		/* Sweep inactive clients and refresh TCP configuration. */
 		if (tcp.last_poll_time.tv_sec >= next_sweep.tv_sec) {
-			fdset_sweep(&tcp.set, &tcp_sweep, NULL);
+			efdset_sweep(&tcp.set, &tcp_sweep, NULL);
 			update_sweep_timer(&next_sweep);
 			update_tcp_conf(&tcp);
 		}
@@ -372,7 +373,7 @@ finish:
 	free(tcp.iov[0].iov_base);
 	free(tcp.iov[1].iov_base);
 	mp_delete(mm.ctx);
-	fdset_clear(&tcp.set);
+	efdset_clear(&tcp.set);
 
 	return ret;
 }
