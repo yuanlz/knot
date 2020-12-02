@@ -163,6 +163,11 @@ static void insert_payload_multi(knot_xdp_msg_t *pkts, int npkts,
 static int alloc_pkts(knot_xdp_msg_t *pkts, int npkts, struct knot_xdp_socket *xsk,
                       xdp_gun_ctx_t *ctx, knot_xdp_msg_t *orig_pkts, uint64_t *tick)
 {
+	static unsigned port_shuffle = 0;
+	if (!port_shuffle) {
+		port_shuffle = (srand(time(NULL)), rand());
+	}
+
 	for (int i = 0; i < npkts; i++) {
 		knot_xdp_flags_t fl = (ctx->ipv6 ? KNOT_XDP_IPV6 : 0) | (ctx->tcp ? KNOT_XDP_TCP | KNOT_XDP_SYN : 0);
 
@@ -184,7 +189,7 @@ static int alloc_pkts(knot_xdp_msg_t *pkts, int npkts, struct knot_xdp_socket *x
 			continue;
 		}
 
-		uint16_t local_port = LOCAL_PORT_MIN + *tick % (LOCAL_PORT_MAX + 1 - LOCAL_PORT_MIN);
+		uint16_t local_port = LOCAL_PORT_MIN + (*tick + port_shuffle) % (LOCAL_PORT_MAX + 1 - LOCAL_PORT_MIN);
 		if (ctx->ipv6) {
 			uint64_t ip_incr = *tick % (1 << (128 - ctx->local_ip_range));
 			set_sockaddr6(&pkts[i].ip_from, &ctx->local_ipv6, local_port, ip_incr);
