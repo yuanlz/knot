@@ -286,7 +286,11 @@ void *knot_xdp_reserve_p(void *buf, knot_xdp_flags_t flags)
 		return buf + sizeof(struct udphdr);
 	} else {
 		struct tcphdr *tcp = buf;
-		return ((void *)(tcp + 1)) + 2; // 2 == DNS message size
+		int add = 2; // DNS message size
+		if (flags & KNOT_XDP_SYN) {
+			add += 4; // MSS option
+		}
+		return ((void *)(tcp + 1)) + add;
 	}
 }
 
@@ -470,7 +474,15 @@ knot_xdp_payload_t knot_xdp_write_tcp(knot_xdp_payload_t p, const knot_xdp_msg_t
 	tcp->source = msg->ip_from.sin6_port;
 	tcp->dest   = msg->ip_to.sin6_port;
 
+	size_t tcp_len = sizeof(*tcp);
+
 	tcp->doff   = 5; // size of TCP hdr with no options in 32bit dwords
+	if (msg->flags & KNOT_XDP_SYN) {
+		uint8_t mss_opt[] = { 0x02, 0x04, 0x04, 0xd2 }; // MSS = 1234 bytes
+		memcpy((uint8_t *)tcp + tcp_len, mss_opt, sizeof(mss_opt));
+		tcp->doff++;
+		tcp_len += 4;
+	}
 
 	tcp->seq = htobe32(msg->seqno);
 	tcp->ack_seq = htobe32(msg->ackno);
@@ -494,15 +506,15 @@ knot_xdp_payload_t knot_xdp_write_tcp(knot_xdp_payload_t p, const knot_xdp_msg_t
 	}
 	checksum_uint16(&chk, htobe16(KNOT_XDP_H_TCP));
 	checksum_uint16(&chk, htobe16(p.len));
-	checksum(&chk, tcp, sizeof(*tcp));
+	checksum(&chk, tcp, tcp_len);
 	if (msg->payload.iov_len > 0) {
 		checksum_uint16(&chk, htobe16(msg->payload.iov_len));
 		checksum_payload(&chk, msg->payload.iov_base, msg->payload.iov_len);
 	}
 	tcp->check = checksum_finish(chk, false);
 
-	p.buf += sizeof(*tcp);
-	p.len -= sizeof(*tcp);
+	p.buf += tcp_len;
+	p.len -= tcp_len;
 	return p;
 }
 
@@ -593,6 +605,7 @@ static void knot_xdp_msg_init_base(knot_xdp_msg_t *msg, void *buf, size_t buf_si
 void knot_xdp_msg_init(knot_xdp_msg_t *msg, void *buf, size_t buf_size, knot_xdp_flags_t flags)
 {
 	knot_xdp_msg_init_base(msg, buf, buf_size, flags, 0);
+	msg->flags = flags;
 
 	if (flags & KNOT_XDP_TCP) {
 		msg->ackno = 0;
@@ -602,7 +615,12 @@ void knot_xdp_msg_init(knot_xdp_msg_t *msg, void *buf, size_t buf_size, knot_xdp
 
 void knot_xdp_msg_answer(knot_xdp_msg_t *msg, void *buf, size_t buf_size, const knot_xdp_msg_t *from)
 {
-	knot_xdp_msg_init_base(msg, buf, buf_size, from->flags & (KNOT_XDP_IPV6 | KNOT_XDP_TCP), 0);
+	msg->flags = from->flags & (KNOT_XDP_IPV6 | KNOT_XDP_TCP);
+	if ((from->flags & KNOT_XDP_SYN) && !(from->flags & KNOT_XDP_ACK)) {
+		msg->flags |= KNOT_XDP_SYN;
+	}
+
+	knot_xdp_msg_init_base(msg, buf, buf_size, msg->flags, 0);
 
 	memcpy(msg->eth_from, from->eth_to, ETH_ALEN);
 	memcpy(msg->eth_to,   from->eth_from, ETH_ALEN);

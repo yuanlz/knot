@@ -164,7 +164,7 @@ static int alloc_pkts(knot_xdp_msg_t *pkts, int npkts, struct knot_xdp_socket *x
                       xdp_gun_ctx_t *ctx, knot_xdp_msg_t *orig_pkts, uint64_t *tick)
 {
 	for (int i = 0; i < npkts; i++) {
-		knot_xdp_flags_t fl = (ctx->ipv6 ? KNOT_XDP_IPV6 : 0) | (ctx->tcp ? KNOT_XDP_TCP : 0);
+		knot_xdp_flags_t fl = (ctx->ipv6 ? KNOT_XDP_IPV6 : 0) | (ctx->tcp ? KNOT_XDP_TCP | KNOT_XDP_SYN : 0);
 
 		if (orig_pkts == NULL) {
 			int ret = knot_xdp_send_alloc(xsk, fl, &pkts[i]);
@@ -331,6 +331,8 @@ void *xdp_gun_thread(void *_ctx)
 						if (!(pkts[i].flags & KNOT_XDP_TCP)) {
 							continue;
 						}
+						assert(re_pkts[i].flags & KNOT_XDP_TCP);
+						assert(re_pkts[i + recvd].flags & KNOT_XDP_TCP);
 						assert(re_pkts[i + recvd].payload.iov_len == 0);
 						if (pkts[i].flags & KNOT_XDP_RST) {
 							tot_rst++;
