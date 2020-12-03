@@ -38,24 +38,17 @@ typedef struct fdset {
 } fdset_t;
 
 
-typedef enum epoll_user_data_fdtype {
+typedef enum epoll_fdtype {
 	CLIENT = 0,
 	MASTER = 1
-} epoll_usr_data_fdtype_t; 
-
-typedef struct epoll_usr_data {
-	unsigned fd;
-	epoll_usr_data_fdtype_t type;
-	time_t timeout;
-	void* ctx;
-} efdset_data_t;
+} epoll_fdtype_t; 
 
 /*! \brief Set of epoll filedescriptors with associated context and timeouts. */
 typedef struct epoll_fdset {
 	unsigned n;          /*!< Active fds. */
-	unsigned size;       /*!< Array size (allocated). */
 	int epollfd;
-	efdset_data_t *ev_data;  /*!< epoll state data for each fd */
+	int master_tresthold;
+	
 } efdset_t;
 
 /*! \brief Mark-and-sweep state. */
@@ -139,7 +132,5 @@ int fdset_sweep(fdset_t* set, fdset_sweep_cb_t cb, void *data);
  */
 int efdset_init(efdset_t *set, unsigned size);
 int efdset_clear(efdset_t* set);
-int efdset_add(efdset_t *set, int fd, unsigned events, epoll_usr_data_fdtype_t type, void *ctx);
-int efdset_set_watchdog(efdset_t* set, int i, int interval);
-int efdset_remove(efdset_t *set, efdset_data_t *i);
-int efdset_sweep(efdset_t* set, fdset_sweep_cb_t cb, void *data);
+int efdset_add(efdset_t *set, int fd, unsigned events, epoll_fdtype_t type, void *ctx);
+int efdset_remove(efdset_t *set, int fd);

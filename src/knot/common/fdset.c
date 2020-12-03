@@ -50,14 +50,6 @@ int fdset_init(fdset_t *set, unsigned size)
 	return fdset_resize(set, size);
 }
 
-static int efdset_resize(efdset_t *set, unsigned size)
-{
-	void *tmp = NULL;
-	MEM_RESIZE(tmp, set->ev_data, size);
-	set->size = size;
-	return KNOT_EOK;
-}
-
 int efdset_init(efdset_t *set, unsigned size)
 {
 	if (set == NULL) {
@@ -66,7 +58,7 @@ int efdset_init(efdset_t *set, unsigned size)
 
 	memset(set, 0, sizeof(fdset_t));
 	set->epollfd = epoll_create1(0);
-	return efdset_resize(set, size);
+	return KNOT_EOK;
 }
 
 int fdset_clear(fdset_t* set)
@@ -87,9 +79,12 @@ int efdset_clear(efdset_t* set)
 	if (set == NULL) {
 		return KNOT_EINVAL;
 	}
-	close(set->epollfd);
-	free(set->ev_data);
+
+	if (set->epollfd >= 0) {
+		close(set->epollfd);
+	}
 	memset(set, 0, sizeof(fdset_t));
+	set->epollfd = -1; //keep fd invalid
 	return KNOT_EOK;
 }
 
@@ -115,30 +110,23 @@ int fdset_add(fdset_t *set, int fd, unsigned events, void *ctx)
 	return i;
 }
 
-int efdset_add(efdset_t *set, int fd, unsigned events, epoll_usr_data_fdtype_t type, void *ctx)
+int efdset_add(efdset_t *set, int fd, unsigned events, epoll_fdtype_t type, void *ctx)
 {
 	if (set == NULL || fd < 0) {
 		return KNOT_EINVAL;
 	}
 
-	/* Realloc needed. */
-	if (set->n == set->size && efdset_resize(set, set->size + FDSET_INIT_SIZE))
-		return KNOT_ENOMEM;
-
 	/* Initialize. */
 	int i = set->n++;
 	struct epoll_event ev;
-	efdset_data_t *data = &(set->ev_data[i]); //maybe will need alloc
-	data->fd = fd;
-	data->type = type;
-	data->ctx = ctx;
-	data->timeout = 0;
-	ev.data.ptr = data;
+	ev.data.fd = fd;
+	if (type == MASTER && fd > set->master_tresthold) {
+		set->master_tresthold = fd;
+	}
 	ev.events = events;
 	epoll_ctl(set->epollfd, EPOLL_CTL_ADD, fd, &ev);
 
-	/* Return index to this descriptor. */
-	return i;
+	return KNOT_EOK;
 }
 
 int fdset_remove(fdset_t *set, unsigned i)
@@ -162,28 +150,15 @@ int fdset_remove(fdset_t *set, unsigned i)
 	return KNOT_EOK;
 }
 
-int efdset_remove(efdset_t *set, efdset_data_t *data)
+int efdset_remove(efdset_t *set, int fd)
 {
-	assert(data != NULL);
-	unsigned i = data - set->ev_data;
-	if (set == NULL || i >= set->n) {
+	if (set == NULL) {
 		return KNOT_EINVAL;
 	}
 
 	/* Decrement number of elms. */
 	--set->n;
-	epoll_ctl(set->epollfd, EPOLL_CTL_DEL, data->fd, NULL);
-
-	/* Nothing else if it is the last one.
-	 * Move last -> i if some remain. */
-	unsigned last = set->n; /* Already decremented */
-	if (i < last) {
-		set->ev_data[i] = set->ev_data[last];
-		struct epoll_event new_ev;
-		new_ev.data.ptr = &set->ev_data[i];
-		new_ev.events = POLLIN;
-		epoll_ctl(set->epollfd, EPOLL_CTL_MOD, set->ev_data[i].fd, &new_ev);
-	}
+	epoll_ctl(set->epollfd, EPOLL_CTL_DEL, fd, NULL);
 
 	return KNOT_EOK;
 }
@@ -207,26 +182,6 @@ int fdset_set_watchdog(fdset_t* set, int i, int interval)
 	return KNOT_EOK;
 }
 
-
-int efdset_set_watchdog(efdset_t* set, int i, int interval)
-{
-	if (set == NULL || i >= set->n) {
-		return KNOT_EINVAL;
-	}
-
-	/* Lift watchdog if interval is negative. */
-	if (interval < 0) {
-		set->ev_data[i].timeout = 0;
-		return KNOT_EOK;
-	}
-
-	/* Update clock. */
-	struct timespec now = time_now();
-
-	set->ev_data[i].timeout = now.tv_sec + interval; /* Only seconds precision. */
-	return KNOT_EOK;
-}
-
 int fdset_sweep(fdset_t* set, fdset_sweep_cb_t cb, void *data)
 {
 	if (set == NULL || cb == NULL) {
@@ -243,34 +198,6 @@ int fdset_sweep(fdset_t* set, fdset_sweep_cb_t cb, void *data)
 		if (set->timeout[i] > 0 && set->timeout[i] <= now.tv_sec) {
 			if (cb(set, i, data) == FDSET_SWEEP) {
 				if (fdset_remove(set, i) == KNOT_EOK)
-					continue; /* Stay on the index. */
-			}
-		}
-
-		/* Next descriptor. */
-		++i;
-	}
-
-	return KNOT_EOK;
-}
-
-int efdset_sweep(efdset_t* set, fdset_sweep_cb_t cb, void *data)
-{
-	if (set == NULL || cb == NULL) {
-		return KNOT_EINVAL;
-	}
-
-	/* Get time threshold. */
-	struct timespec now = time_now();
-
-	unsigned i = 0;
-	while (i < set->n) {
-
-		/* Check sweep state, remove if requested. */
-		if (set->ev_data[i].timeout > 0 && set->ev_data[i].timeout <= now.tv_sec) {
-			//TODO sweep
-			if (cb(set, i, data) == FDSET_SWEEP) {
-				if (efdset_remove(set, &(set->ev_data[i])) == KNOT_EOK)
 					continue; /* Stay on the index. */
 			}
 		}

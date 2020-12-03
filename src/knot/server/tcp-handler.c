@@ -78,20 +78,20 @@ static void update_tcp_conf(tcp_context_t *tcp)
 /*! \brief Sweep TCP connection. */
 static enum fdset_sweep_state tcp_sweep(efdset_t *set, int i, void *data)
 {
-	UNUSED(data);
-	assert(set && i < set->n && i >= 0);
-	int fd = set->ev_data[i].fd;
+	// UNUSED(data);
+	// assert(set && i < set->n && i >= 0);
+	// int fd = set->ev_data[i].fd;
 
-	/* Best-effort, name and shame. */
-	struct sockaddr_storage ss;
-	socklen_t len = sizeof(struct sockaddr_storage);
-	if (getpeername(fd, (struct sockaddr*)&ss, &len) == 0) {
-		char addr_str[SOCKADDR_STRLEN] = {0};
-		sockaddr_tostr(addr_str, sizeof(addr_str), &ss);
-		log_notice("TCP, terminated inactive client, address %s", addr_str);
-	}
+	// /* Best-effort, name and shame. */
+	// struct sockaddr_storage ss;
+	// socklen_t len = sizeof(struct sockaddr_storage);
+	// if (getpeername(fd, (struct sockaddr*)&ss, &len) == 0) {
+	// 	char addr_str[SOCKADDR_STRLEN] = {0};
+	// 	sockaddr_tostr(addr_str, sizeof(addr_str), &ss);
+	// 	log_notice("TCP, terminated inactive client, address %s", addr_str);
+	// }
 
-	close(fd);
+	// close(fd);
 
 	return FDSET_SWEEP;
 }
@@ -213,31 +213,30 @@ static int tcp_handle(tcp_context_t *tcp, int fd, struct iovec *rx, struct iovec
 	return ret;
 }
 
-static void tcp_event_accept(tcp_context_t *tcp, efdset_data_t *ctx)
+static void tcp_event_accept(tcp_context_t *tcp, int fd)
 {
-	assert(tcp != NULL && ctx != NULL);
+	assert(tcp != NULL);
 	/* Accept client. */
-	int client = net_accept(ctx->fd, NULL);
+	int client = net_accept(fd, NULL);
 	if (client >= 0) {
 		/* Assign to fdset. */
-		int next_id = efdset_add(&tcp->set, client, POLLIN, CLIENT, NULL);
-		if (next_id < 0) {
+		int ret = efdset_add(&tcp->set, client, POLLIN, CLIENT, NULL);
+		if (ret != KNOT_EOK) {
 			close(client);
 			return;
 		}
 
 		/* Update watchdog timer. */
-		//TODO
-		efdset_set_watchdog(&tcp->set, next_id, tcp->idle_timeout);
+		//efdset_set_watchdog(&tcp->set, next, tcp->idle_timeout);
 	}
 }
 
-static int tcp_event_serve(tcp_context_t *tcp, efdset_data_t *ctx)
+static int tcp_event_serve(tcp_context_t *tcp, int fd)
 {
-	int ret = tcp_handle(tcp, ctx->fd, &tcp->iov[0], &tcp->iov[1]);
+	int ret = tcp_handle(tcp, fd, &tcp->iov[0], &tcp->iov[1]);
 	if (ret == KNOT_EOK) {
 		/* Update socket activity timer. */
-		efdset_set_watchdog(&tcp->set, ctx->fd, tcp->idle_timeout);
+		//efdset_set_watchdog(&tcp->set, ctx, tcp->idle_timeout);
 	}
 
 	return ret;
@@ -266,18 +265,18 @@ static void tcp_wait_for_events(tcp_context_t *tcp)
 	for (struct epoll_event *it = events; nfds > 0; ++it) {
 		bool should_close = false;
 		if (it->events & (POLLERR|POLLHUP|POLLNVAL)) {
-			should_close = (((struct epoll_usr_data *)it->data.ptr)->type == CLIENT);
+			should_close = (it->data.fd > set->master_tresthold);
 			--nfds;
 		} else if (it->events & (POLLIN)) {
 			/* Master sockets - new connection to accept. */
-			if (((struct epoll_usr_data *)it->data.ptr)->type == MASTER && tcp->is_throttled == false) {
+			if (it->data.fd <= set->master_tresthold && tcp->is_throttled == false) {
 				/* Don't accept more clients than configured. */
 				if (set->n < tcp->max_worker_fds) {
-					tcp_event_accept(tcp, it->data.ptr);
+					tcp_event_accept(tcp, it->data.fd);
 				}
 			/* Client sockets - already accepted connection or
 			   closed connection :-( */
-			} else if (tcp_event_serve(tcp, it->data.ptr) != KNOT_EOK) {
+			} else if (tcp_event_serve(tcp, it->data.fd) != KNOT_EOK) {
 				should_close = true;
 			}
 			--nfds;
@@ -286,7 +285,7 @@ static void tcp_wait_for_events(tcp_context_t *tcp)
 		/* Evaluate. */
 		if (should_close) {
 			close(it->data.fd);
-			efdset_remove(set, it->data.ptr);
+			efdset_remove(set, it->data.fd);
 		}
 	}
 }
@@ -363,7 +362,7 @@ int tcp_master(dthread_t *thread)
 
 		/* Sweep inactive clients and refresh TCP configuration. */
 		if (tcp.last_poll_time.tv_sec >= next_sweep.tv_sec) {
-			efdset_sweep(&tcp.set, &tcp_sweep, NULL);
+			//efdset_sweep(&tcp.set, &tcp_sweep, NULL);
 			update_sweep_timer(&next_sweep);
 			update_tcp_conf(&tcp);
 		}
