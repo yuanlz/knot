@@ -29,6 +29,9 @@
 #include <unistd.h>
 
 #include <arpa/inet.h>
+#include <asm/types.h>
+#include <linux/netlink.h>
+#include <linux/rtnetlink.h>
 #include <netinet/in.h>
 #include <net/if.h>
 #include <sys/ioctl.h>
@@ -477,6 +480,131 @@ static bool str2mac(const char *str, uint8_t mac[])
 	return true;
 }
 
+#define SOME_ERROR (errno == 0 ? KNOT_ERROR : -errno)
+
+static void print_junk(const char *msg, void *junk, int len)
+{
+	printf("%s: ", msg);
+	while (len-- > 0) {
+		printf("%02x ", (unsigned)*(uint8_t *)(junk++));
+	}
+	printf("\n");
+}
+/*
+static int test_one(struct sockaddr_nl *addr, struct nlmsghdr *n, void *arg)
+{
+	UNUSED(arg);
+
+	struct ndmsg *r = NLMSG_DATA(n);
+	int len = n->nlmsg_len;
+	struct rtattr *tb[NDA_MAX+1];
+
+	len -= NLMSG_LENGTH(sizeof(*r));
+	if (len < 0) {
+		return KNOT_EMALF;
+	}
+
+	printf("type %hu len %d\n", n->nlmsg_type, len);
+	print_junk("addr", addr, sizeof(*addr));
+
+	parse_rtattr(tb, NDA_MAX, NDA_RTA(r), n->nlmsg_len - NLMSG_LENGTH(sizeof(*r)));
+
+	if (tb[NDA_DST]) {
+		print_junk("dst", RTA_DATA(tb[NDA_DST]), RTA_PAYLOAD(tb[NDA_DST]));
+	}
+	if (tb[NDA_LLADDR]) {
+		print_junk("lladdr", RTA_DATA(tb[NDA_LLADDR]), RTA_PAYLOAD(tb[NDA_LLADDR]));
+	}
+}
+
+static int test(bool ipv6)
+{
+	errno = 0;
+
+	struct rtnl_handle rth = { 0 };
+	int ret = rtnl_open(&rth, 0);
+	if (ret < 0) {
+		return SOME_ERROR;
+	}
+
+	struct ndmsg ndm = { 0 };
+	ndm.ndm_family = ipv6 ? AF_INET6 : AF_INET;
+	ret = rtnl_dump_request(&rth, RTM_GETNEIGH, &ndm, sizeof(ndm));
+	if (ret < 0) {
+		return SOME_ERROR;
+	}
+
+	ret = rtnl_dump_filter(&rth, test_one, NULL);
+	if (ret < 0) {
+		return SOME_ERROR;
+	}
+
+	return KNOT_EOK;
+}
+*/
+static int test2(bool ipv6)
+{
+	int rtnlfd = socket(AF_NETLINK, SOCK_RAW, NETLINK_ROUTE);
+	if (rtnlfd < 0) {
+		return -errno;
+	}
+
+	struct sockaddr_nl local_sa_nl = { .nl_family = AF_NETLINK, .nl_pid = getpid() };
+	int ret = bind(rtnlfd, (struct sockaddr *)&local_sa_nl, sizeof(local_sa_nl));
+	if (ret < 0) {
+		goto fail;
+	}
+
+	struct sockaddr_nl kernel_sa_nl = { .nl_family = AF_NETLINK };
+	struct {
+		struct nlmsghdr nlmsg;
+		struct ndmsg ndm;
+	} wholemsg = {
+		.nlmsg = { .nlmsg_len = NLMSG_ALIGN(sizeof(wholemsg.ndm)), .nlmsg_type = RTM_GETNEIGH,
+		           .nlmsg_pid = getpid(), .nlmsg_seq = 1, .nlmsg_flags = NLM_F_REQUEST | NLM_F_DUMP },
+		.ndm = { .ndm_family = ipv6 ? AF_INET6 : AF_INET },
+	};
+	struct iovec msg_iov = { .iov_base = &wholemsg.nlmsg, .iov_len = wholemsg.nlmsg.nlmsg_len };
+	struct msghdr msg = { .msg_name = &kernel_sa_nl, .msg_namelen = sizeof(kernel_sa_nl),
+	                      .msg_iov = &msg_iov, .msg_iovlen = 1 };
+	ret = sendmsg(rtnlfd, &msg, 0);
+	if (ret < 0) {
+		goto fail;
+	}
+
+	uint8_t buf[1024];
+	ret = recv(rtnlfd, buf, sizeof(buf), 0);
+	if (ret < 0) {
+		goto fail;
+	}
+	struct nlmsghdr *renl = (struct nlmsghdr *)buf;
+	unsigned renllen = ret;
+	printf("recvd %u\n", renllen);
+	if (renllen < sizeof(*renl) || renl->nlmsg_type == NLMSG_DONE) {
+		close(rtnlfd);
+		return KNOT_ENOENT;
+	}
+
+	for( ; NLMSG_OK(renl, renllen); renl = NLMSG_NEXT(renl, renllen)) {
+		struct ndmsg *rend = (struct ndmsg *)NLMSG_DATA(renl);
+		struct rtattr *rerta = (struct rtattr *)(rend + 1); // TODO ?
+		unsigned rendlen = NLMSG_PAYLOAD(renl, renllen); // RTA_PAYLOAD ?
+		printf("rendlen %u fa %d if %d state %hu type %d\n", rendlen, (int)rend->ndm_family, rend->ndm_ifindex, rend->ndm_state, (int)rend->ndm_type);
+		for ( ; RTA_OK(rerta, rendlen); rerta = RTA_NEXT(rerta, rendlen)) {
+			printf("RTA type %hu\n", rerta->rta_type);
+		}
+	}
+
+	close(rtnlfd);
+	return KNOT_EOK;
+
+fail:
+	ret = errno;
+	printf("fail %s\n", strerror(ret));
+	close(rtnlfd);
+	return knot_map_errno_code(ret);
+}
+
 static FILE *popen_ip(char *arg1, char *arg2, char *arg3)
 {
 	char *args[5] = { "ip", arg1, arg2, arg3, NULL };
@@ -601,6 +729,9 @@ static bool configure_target(char *target_str, char *local_ip, xdp_gun_ctx_t *ct
 	}
 	usleep(10000);
 
+	ret = test2(ctx->ipv6);
+	printf("[%s]\n", knot_strerror(ret));
+
 	char dev1[IFNAMSIZ], dev2[IFNAMSIZ];
 	ret = distantIP2MAC(target_str, ctx->ipv6, dev1, ctx->target_mac);
 	if (ret != KNOT_EOK) {
@@ -608,6 +739,7 @@ static bool configure_target(char *target_str, char *local_ip, xdp_gun_ctx_t *ct
 		       target_str, knot_strerror(ret));
 		return false;
 	}
+	print_junk("real remote MAC", ctx->target_mac, 6);
 	ctx->local_ip_range = ctx->ipv6 ? 128 : 32; // by default use one IP
 	if (local_ip != NULL) {
 		at = strrchr(local_ip, '/');
@@ -789,6 +921,8 @@ int main(int argc, char *argv[])
 		free_global_payloads();
 		return EXIT_FAILURE;
 	}
+
+	return EXIT_SUCCESS;
 
 	TRANSACTION_ID = time(NULL) % UINT16_MAX;
 
