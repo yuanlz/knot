@@ -23,6 +23,7 @@
 #include "utils/common/https.h"
 #include "utils/common/params.h"
 #include "utils/common/tls.h"
+#include "utils/common/quic.h"
 
 /*! \brief Structure containing server information. */
 typedef struct {
@@ -80,6 +81,7 @@ typedef struct {
 	/*! HTTPS context. */
 	https_ctx_t https;
 #endif
+	quic_ctx_t quic;
 } net_t;
 
 /*!
@@ -164,6 +166,7 @@ int net_init(const srv_info_t     *local,
              const net_flags_t    flags,
              const tls_params_t   *tls_params,
              const https_params_t *https_params,
+			 const quic_params_t  *quic_params,
              net_t                *net);
 
 /*!

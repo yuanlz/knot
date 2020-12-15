@@ -177,6 +177,7 @@ int net_init(const srv_info_t     *local,
              const net_flags_t    flags,
              const tls_params_t   *tls_params,
              const https_params_t *https_params,
+			 const quic_params_t  *quic_params,
              net_t                *net)
 {
 	if (remote == NULL || net == NULL) {
@@ -212,9 +213,10 @@ int net_init(const srv_info_t     *local,
 	net->remote = remote;
 	net->flags = flags;
 
+	int ret = KNOT_EOK;
 	// Prepare for TLS.
 	if (tls_params != NULL && tls_params->enable) {
-		int ret = tls_ctx_init(&net->tls, tls_params, net->wait);
+		ret = tls_ctx_init(&net->tls, tls_params, net->wait);
 		if (ret != KNOT_EOK) {
 			net_clean(net);
 			return ret;
@@ -230,6 +232,12 @@ int net_init(const srv_info_t     *local,
 			}
 		}
 #endif //LIBNGHTTP2
+	} else if (quic_params != NULL && quic_params->enable) {
+		ret = quic_ctx_init(&net->quic, quic_params);
+		if (ret != KNOT_EOK) {
+			net_clean(net);
+			return ret;
+		}
 	}
 
 	return KNOT_EOK;
@@ -329,8 +337,9 @@ int net_connect(net_t *net)
 		(void)bind(sockfd, (struct sockaddr *)&local, sockaddr_len(&local));
 	}
 
+	int ret = 0;
 	if (net->socktype == SOCK_STREAM) {
-		int  cs, err, ret = 0;
+		int  cs, err;
 		socklen_t err_len = sizeof(err);
 		bool     fastopen = net->flags & NET_FLAGS_FASTOPEN;
 
@@ -384,6 +393,14 @@ int net_connect(net_t *net)
 #else
 			ret = tls_ctx_connect(&net->tls, sockfd, net->tls.params->sni);
 #endif //LIBNGHTTP2
+			if (ret != KNOT_EOK) {
+				close(sockfd);
+				return ret;
+			}
+		}
+	} else if (net->socktype == SOCK_DGRAM) {
+		if (net->quic.params != NULL && net->quic.params->enable) {
+			ret = quic_ctx_connect(&net->quic);
 			if (ret != KNOT_EOK) {
 				close(sockfd);
 				return ret;
