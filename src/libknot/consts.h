@@ -156,4 +156,19 @@ typedef enum {
 	KNOT_DNSSEC_ALG_PRIVATEOID         = 254
 } knot_dnssec_algorithm_t;
 
+/*!
+ * \brief Service Binding (SVCB) Parameter Registry
+ *
+ * https://tools.ietf.org/html/draft-ietf-dnsop-svcb-https-02 // FIXME
+ */
+typedef enum {
+	KNOT_SVCB_PARAM_MANDATORY    = 0,
+	KNOT_SVCB_PARAM_ALPN         = 1,
+	KNOT_SVCB_PARAM_NDALPN       = 2,
+	KNOT_SVCB_PARAM_PORT         = 3,
+	KNOT_SVCB_PARAM_IPV4HINT     = 4,
+	KNOT_SVCB_PARAM_ECHCONFIG    = 5,
+	KNOT_SVCB_PARAM_IPV6HINT     = 6,
+} knot_svcb_param_t;
+
 /*! @} */

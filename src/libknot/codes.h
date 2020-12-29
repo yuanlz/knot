@@ -47,4 +47,9 @@ extern const knot_lookup_t knot_tsig_rcode_names[];
  */
 extern const knot_lookup_t knot_dnssec_alg_names[];
 
+/*!
+ * \brief Service binding (SVCB) param types.
+ */
+extern const knot_lookup_t knot_svcb_param_keys[];
+
 /*! @} */

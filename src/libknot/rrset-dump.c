@@ -578,24 +578,29 @@ static void wire_unknown_to_str(rrset_dump_params_t *p)
 	}
 }
 
-static void wire_text_to_str(rrset_dump_params_t *p, bool quote, bool with_header)
+static void wire_text_to_str(rrset_dump_params_t *p, bool quote, unsigned with_header)
 {
 	CHECK_PRET
 
 	size_t in_len = 0;
 
-	if (with_header) {
-		// First byte is string length.
-		CHECK_INMAX(1)
-		in_len = *(p->in);
-		p->in++;
-		p->in_max--;
-
-		// Check if the given length makes sense.
-		CHECK_INMAX(in_len)
-	} else {
+	CHECK_INMAX(with_header)
+	switch (with_header) {
+	case 0:
 		in_len = p->in_max;
+		break;
+	case 1:
+		in_len = *(p->in);
+		break;
+	case 2:
+		in_len = knot_wire_read_u16(p->in);
+		break;
+	default:
+		assert(0);
 	}
+	p->in += with_header;
+	p->in_max -= with_header;
+	CHECK_INMAX(in_len)
 
 	// Check if quotation can ever be disabled (parser protection fallback).
 	if (!quote) {
@@ -1198,6 +1203,118 @@ static void wire_tsig_rcode_to_str(rrset_dump_params_t *p)
 	p->in_max -= in_len;
 }
 
+static void wire_svcb_paramkey_to_str(rrset_dump_params_t *p)
+{
+	uint16_t param_key = knot_wire_read_u16(p->in);
+	const knot_lookup_t *type = knot_lookup_by_id(knot_svcb_param_keys, param_key);
+
+	if (type != NULL) {
+		dump_string(p, type->name);
+		p->in += sizeof(param_key);
+		p->in_max -= sizeof(param_key);
+	} else {
+		dump_string(p, "key");
+		wire_num16_to_str(p);
+	}
+}
+
+static void wire_value_list_to_str(rrset_dump_params_t *p,
+                                   void (*list_item_dump_fun)(rrset_dump_params_t *p),
+                                   const uint8_t *expect_end)
+{
+	bool first = true;
+
+	while (expect_end > p->in) {
+		if (first) {
+			first = false;
+		} else {
+			dump_string(p, ",");
+		}
+		CHECK_PRET
+
+		list_item_dump_fun(p);
+	}
+	if (expect_end != p->in) {
+		p->ret = -1;
+	}
+}
+
+static void wire_text_to_str1(rrset_dump_params_t *p) {
+	wire_text_to_str(p, false, 1);
+}
+
+static void wire_echconfig_to_base64(rrset_dump_params_t *p, unsigned echc_len)	// TODO is this correct?
+{
+	CHECK_INMAX(echc_len)
+
+	int b64_len = ((echc_len + 2) / 3) * 4;
+	uint8_t b64_buf[b64_len + 1];
+	int32_t ret = knot_base64_encode(p->in, echc_len, b64_buf, b64_len);
+	if (ret < 0) {
+		p->ret = -1;
+	} else {
+		assert(ret <= b64_len);
+		b64_buf[ret] = '\0';
+		dump_string(p, (const char *)b64_buf);
+	}
+	p->in += echc_len;
+	p->in_max -= echc_len;
+}
+
+static void wire_svcparam_to_str(rrset_dump_params_t *p)
+{
+	CHECK_PRET
+
+	CHECK_INMAX(4)
+
+	// pre-fetch key and length for later use
+	uint16_t key_type = knot_wire_read_u16(p->in);
+	uint16_t val_len = knot_wire_read_u16(p->in + sizeof(key_type));
+
+	wire_svcb_paramkey_to_str(p);
+
+	p->in += sizeof(val_len);
+	p->in_max -= sizeof(val_len);
+	CHECK_INMAX(val_len)
+
+	if (val_len > 0) {
+		dump_string(p, "=");
+		CHECK_PRET
+
+		switch (key_type) {
+		case KNOT_SVCB_PARAM_MANDATORY:
+			wire_value_list_to_str(p, wire_svcb_paramkey_to_str, p->in + val_len);
+			break;
+		case KNOT_SVCB_PARAM_ALPN:
+			wire_value_list_to_str(p, wire_text_to_str1, p->in + val_len);
+			break;
+		case KNOT_SVCB_PARAM_NDALPN:
+			p->ret = -1; // must not have value
+			break;
+		case KNOT_SVCB_PARAM_PORT:
+			if (val_len != 2) {
+				p->ret = -1;
+			} else {
+				wire_num16_to_str(p);
+			}
+			break;
+		case KNOT_SVCB_PARAM_IPV4HINT:
+			wire_value_list_to_str(p, wire_ipv4_to_str, p->in + val_len);
+			break;
+		case KNOT_SVCB_PARAM_ECHCONFIG:
+			wire_echconfig_to_base64(p, val_len);
+			break;
+		case KNOT_SVCB_PARAM_IPV6HINT:
+			wire_value_list_to_str(p, wire_ipv6_to_str, p->in + val_len);
+			break;
+		default:
+			p->in -= sizeof(val_len); // rollback to where the string length resides
+			p->in_max += sizeof(val_len);
+			wire_text_to_str(p, true, sizeof(val_len));
+		}
+	}
+}
+
 static size_t dnskey_len(const uint8_t *rdata,
                          const size_t  rdata_len)
 {
@@ -1379,9 +1496,9 @@ static void dnskey_info(const uint8_t *rdata,
 				2, true, ""); CHECK_RET(p);
 #define DUMP_OMIT	wire_data_omit(p); CHECK_RET(p);
 #define DUMP_KEY_OMIT	wire_dnskey_to_tag(p); CHECK_RET(p);
-#define DUMP_TEXT	wire_text_to_str(p, true, true); CHECK_RET(p);
+#define DUMP_TEXT	wire_text_to_str(p, true, 1); CHECK_RET(p);
 #define DUMP_LONG_TEXT	wire_text_to_str(p, true, false); CHECK_RET(p);
-#define DUMP_UNQUOTED	wire_text_to_str(p, false, true); CHECK_RET(p);
+#define DUMP_UNQUOTED	wire_text_to_str(p, false, 1); CHECK_RET(p);
 #define DUMP_BITMAP	wire_bitmap_to_str(p); CHECK_RET(p);
 #define DUMP_APL	wire_apl_to_str(p); CHECK_RET(p);
 #define DUMP_LOC	wire_loc_to_str(p); CHECK_RET(p);
@@ -1389,6 +1506,7 @@ static void dnskey_info(const uint8_t *rdata,
 #define DUMP_L64	wire_l64_to_str(p); CHECK_RET(p);
 #define DUMP_EUI	wire_eui_to_str(p); CHECK_RET(p);
 #define DUMP_TSIG_RCODE	wire_tsig_rcode_to_str(p); CHECK_RET(p);
+#define DUMP_SVCPARAM	wire_svcparam_to_str(p); CHECK_RET(p);
 #define DUMP_UNKNOWN	wire_unknown_to_str(p); CHECK_RET(p);
 
 static int dump_a(DUMP_PARAMS)
@@ -1802,6 +1920,28 @@ static int dump_caa(DUMP_PARAMS)
 	DUMP_END;
 }
 
+static int dump_svcb(DUMP_PARAMS)
+{
+	DUMP_NUM16; DUMP_SPACE;
+	DUMP_DNAME; DUMP_SPACE;
+	if (!p->style->wrap) {
+		while (p->in_max > 0) {
+			DUMP_SVCPARAM; DUMP_SPACE;
+		}
+	} else {
+		WRAP_INIT;
+		if (p->in_max > 0) {
+			DUMP_SVCPARAM; DUMP_SPACE;
+		}
+		while (p->in_max > 0) {
+			WRAP_LINE; DUMP_SVCPARAM; DUMP_SPACE;
+		}
+		WRAP_END;
+	}
+
+	DUMP_END;
+}
+
 static int dump_unknown(DUMP_PARAMS)
 {
 	if (p->style->wrap) {
@@ -1896,6 +2036,9 @@ static int txt_dump_data(rrset_dump_params_t *p, uint16_t type)
 			return dump_uri(p);
 		case KNOT_RRTYPE_CAA:
 			return dump_caa(p);
+		case KNOT_RRTYPE_SVCB:
+		case KNOT_RRTYPE_HTTPS:
+			return dump_svcb(p);
 		default:
 			return dump_unknown(p);
 	}

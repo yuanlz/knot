@@ -79,3 +79,15 @@ const knot_lookup_t knot_dnssec_alg_names[] = {
 	{ KNOT_DNSSEC_ALG_PRIVATEOID,         "PRIVATEOID" },
 	{ 0, NULL }
 };
+
+_public_
+const knot_lookup_t knot_svcb_param_keys[] = {
+	{ KNOT_SVCB_PARAM_MANDATORY,      "mandatory" },
+	{ KNOT_SVCB_PARAM_ALPN,           "alpn" },
+	{ KNOT_SVCB_PARAM_NDALPN,         "no-default-alpn" },
+	{ KNOT_SVCB_PARAM_PORT,           "port" },
+	{ KNOT_SVCB_PARAM_IPV4HINT,       "ipv4hint" },
+	{ KNOT_SVCB_PARAM_ECHCONFIG,      "echconfig" },
+	{ KNOT_SVCB_PARAM_IPV6HINT,       "ipv6hint" },
+	{0, NULL }
+};
