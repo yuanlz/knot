@@ -36,6 +36,7 @@
 
 /*! \brief Maximal length of rdata item. */
 #define MAX_ITEM_LENGTH		255
+#define MAX_ITEM_LENGTH2	65535
 
 /*! \brief Latitude value for equator (2^31). */
 #define LOC_LAT_ZERO	(uint32_t)2147483648
