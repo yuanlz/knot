@@ -261,6 +261,10 @@ resp.cmp(bind)
 resp = knot.dig("a.wildcard-cname.flags", "A", udp=True)
 resp.cmp(bind)
 
+# Wildcard CNAME with asterisk query
+resp = knot.dig("*.a.wildcard-cname.flags", "A", udp=True)
+resp.cmp(bind)
+
 # Wildcard chain to A (NODATA)
 resp = knot.dig("a.wildcard-cname.flags", "TXT", udp=True)
 resp.cmp(bind)

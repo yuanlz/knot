@@ -258,9 +258,16 @@ static int follow_cname(knot_pkt_t *pkt, uint16_t rrtype, knotd_qdata_t *qdata)
 	/* Check whether RR is already in the packet. */
 	uint16_t flags = KNOT_PF_CHECKDUP;
 
+	/* If this is first CNAME to be put into answer, it matches qname.
+	   This is cruical for wildcard expansion! See put_answer() */
+	uint16_t compr_hint = KNOT_COMPR_HINT_NONE;
+	if (pkt->rrset_count == 0 && rrtype == KNOT_RRTYPE_CNAME) {
+		compr_hint = KNOT_COMPR_HINT_QNAME;
+	}
+
 	/* Now, try to put CNAME to answer. */
 	uint16_t rr_count_before = pkt->rrset_count;
-	int ret = process_query_put_rr(pkt, qdata, &cname_rr, &rrsigs, 0, flags);
+	int ret = process_query_put_rr(pkt, qdata, &cname_rr, &rrsigs, compr_hint, flags);
 	switch (ret) {
 	case KNOT_EOK:    break;
 	case KNOT_ESPACE: return KNOTD_IN_STATE_TRUNC;
