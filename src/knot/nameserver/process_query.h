@@ -34,6 +34,7 @@ typedef struct knotd_qdata_extra {
 
 	/* Currently processed nodes. */
 	const zone_node_t *node, *encloser, *previous;
+	bool node_is_wildcard; /*!< The node has been found as a wildcard to qname. */
 
 	/* Original QNAME case. */
 	knot_dname_storage_t orig_qname;

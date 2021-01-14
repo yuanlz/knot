@@ -269,6 +269,10 @@ resp.cmp(bind)
 resp = knot.dig("a.wildcard-cname.flags", "TXT", udp=True)
 resp.cmp(bind)
 
+# Wild wildcard expansion
+resp = knot.dig("wild-cname.flags", "TXT", udp=True)
+resp.cmp(bind)
+
 # Wildcard chain to NS
 resp = knot.dig("a.wildcard-deleg.flags", "NS", udp=True)
 resp.cmp(bind, additional=True)

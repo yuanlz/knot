@@ -185,6 +185,7 @@ static int put_delegation(knot_pkt_t *pkt, knotd_qdata_t *qdata)
 	/* Find closest delegation point. */
 	while (!(qdata->extra->node->flags & NODE_FLAGS_DELEG)) {
 		qdata->extra->node = node_parent(qdata->extra->node);
+		qdata->extra->node_is_wildcard = false;
 	}
 
 	/* Insert NS record. */
@@ -375,6 +376,8 @@ static int name_not_found(knot_pkt_t *pkt, knotd_qdata_t *qdata)
 
 		qdata->extra->node = wildcard_node;
 		assert(qdata->extra->node != NULL);
+		assert(knot_dname_is_wildcard(qdata->extra->node->owner));
+		qdata->extra->node_is_wildcard = true;
 
 		/* Follow expanded wildcard. */
 		int next_state = name_found(pkt, qdata);
@@ -391,6 +394,7 @@ static int name_not_found(knot_pkt_t *pkt, knotd_qdata_t *qdata)
 	knot_rrset_t dname_rrset = node_rrset(qdata->extra->encloser, KNOT_RRTYPE_DNAME);
 	if (!knot_rrset_empty(&dname_rrset)) {
 		qdata->extra->node = qdata->extra->encloser; /* Follow encloser as new node. */
+		qdata->extra->node_is_wildcard = false;
 		return follow_cname(pkt, KNOT_RRTYPE_DNAME, qdata);
 	}
 
@@ -404,6 +408,7 @@ static int name_not_found(knot_pkt_t *pkt, knotd_qdata_t *qdata)
 	/* Name is below delegation. */
 	if ((node->flags & NODE_FLAGS_DELEG)) {
 		qdata->extra->node = node;
+		qdata->extra->node_is_wildcard = false;
 		return KNOTD_IN_STATE_DELEG;
 	}
 
@@ -415,6 +420,7 @@ static int solve_name(int state, knot_pkt_t *pkt, knotd_qdata_t *qdata)
 	int ret = zone_contents_find_dname(qdata->extra->contents, qdata->name,
 	                                   &qdata->extra->node, &qdata->extra->encloser,
 	                                   &qdata->extra->previous);
+	qdata->extra->node_is_wildcard = false;
 
 	switch (ret) {
 	case ZONE_NAME_FOUND:

@@ -30,11 +30,11 @@ static bool empty_nonterminal(const zone_node_t *node)
 }
 
 /*!
- * \brief Check if wildcard expansion happened for given node and QNAME.
+ * \brief Check if wildcard expansion happened for given node.
  */
-static bool wildcard_expanded(const zone_node_t *node, const knot_dname_t *qname)
+static bool wildcard_expanded(const zone_node_t *node, knotd_qdata_t *qdata)
 {
-	return !knot_dname_is_wildcard(qname) && knot_dname_is_wildcard(node->owner);
+	return qdata->extra->node_is_wildcard && node == qdata->extra->node;
 }
 
 /*!
@@ -339,10 +339,6 @@ static int put_wildcard_answer(const zone_node_t *wildcard,
                                knotd_qdata_t *qdata,
                                knot_pkt_t *resp)
 {
-	if (!wildcard_expanded(wildcard, qname)) {
-		return KNOT_EOK;
-	}
-
 	int ret = 0;
 
 	if (knot_is_nsec3_enabled(zone)) {
@@ -540,7 +536,7 @@ static int put_nsec3_nodata(const knot_dname_t *qname,
 
 	// Closest encloser proof for wildcard effect or NSEC3 opt-out.
 
-	if (wildcard_expanded(match, qname) || ds_optout(match)) {
+	if (wildcard_expanded(match, qdata) || ds_optout(match)) {
 		const zone_node_t *cpe = nsec3_encloser(closest);
 		ret = put_closest_encloser_proof(qname, zone, cpe, qdata, resp);
 	}

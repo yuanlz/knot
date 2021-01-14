@@ -863,8 +863,8 @@ int process_query_put_rr(knot_pkt_t *pkt, knotd_qdata_t *qdata,
 	/* Wildcard expansion applies only for answers. */
 	bool expand = false;
 	if (pkt->current == KNOT_ANSWER) {
-		/* Expand if RR is wildcard & we didn't query for wildcard. */
-		expand = (knot_dname_is_wildcard(rr->owner) && !knot_dname_is_wildcard(qdata->name));
+		expand = (qdata->extra->node_is_wildcard && rr->owner == qdata->extra->node->owner);
+		assert(!qdata->extra->node_is_wildcard || knot_dname_is_wildcard(qdata->extra->node->owner));
 	}
 
 	int ret = KNOT_EOK;
