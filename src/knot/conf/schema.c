@@ -376,7 +376,10 @@ static const yp_item_t desc_policy[] = {
 	{ C_MODULE,              YP_TDATA, YP_VDATA = { 0, NULL, mod_id_to_bin, mod_id_to_txt }, \
 	                                   YP_FMULTI | FLAGS, { check_modref } }, \
 	{ C_COMMENT,             YP_TSTR,  YP_VNONE }, \
-	/* Legacy items.*/ \
+	/* New terminology as per RFC 8499, section 6. */
+	{ C_PRIMARY,             YP_TREF,  YP_VREF = { C_RMT }, YP_FMULTI, { check_ref } }, \
+	{ C_DDNS_PRIMARY,        YP_TREF,  YP_VREF = { C_RMT }, YP_FNONE, { check_ref } }, \
+	/* Legacy items. */ \
 	{ C_DISABLE_ANY,         YP_TBOOL, YP_VNONE }, \
 	{ C_MAX_ZONE_SIZE,       YP_TINT,  YP_VINT = { 0, SSIZE_MAX, SSIZE_MAX, YP_SSIZE }, FLAGS }, \
 	{ C_MAX_JOURNAL_USAGE,   YP_TINT,  YP_VINT = { KILO(40), SSIZE_MAX, MEGA(100), YP_SSIZE } }, \

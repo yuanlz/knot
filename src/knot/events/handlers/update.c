@@ -263,7 +263,13 @@ static void forward_request(conf_t *conf, zone_t *zone, knot_request_t *request)
 	/* Read the ddns master or the first master. */
 	conf_val_t remote = conf_zone_get(conf, C_DDNS_MASTER, zone->name);
 	if (remote.code != KNOT_EOK) {
+		remote = conf_zone_get(conf, C_DDNS_PRIMARY, zone->name);
+	}
+	if (remote.code != KNOT_EOK) {
 		remote = conf_zone_get(conf, C_MASTER, zone->name);
+	}
+	if (remote.code != KNOT_EOK) {
+		remote = conf_zone_get(conf, C_PRIMARY, zone->name);
 	}
 
 	/* Get the number of remote addresses. */
