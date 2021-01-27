@@ -1,4 +1,4 @@
-/*  Copyright (C) 2020 CZ.NIC, z.s.p.o. <knot-dns@labs.nic.cz>
+/*  Copyright (C) 2021 CZ.NIC, z.s.p.o. <knot-dns@labs.nic.cz>
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -194,7 +194,7 @@ static int reverse_addr_parse(knotd_qdata_t *qdata, const synth_template_t *tpl,
 	bool can_ipv6 = true;
 	unsigned labels = 0;
 
-	char buf4[18], *buf4_end = buf4 + sizeof(buf4), *buf4_pos = buf4_end;
+	uint8_t buf4[16], *buf4_end = buf4 + sizeof(buf4), *buf4_pos = buf4_end;
 	uint8_t buf6[32], *buf6_end = buf6 + sizeof(buf6), *buf6_pos = buf6_end;
 
 	for ( ; labels < IPV6_ADDR_LABELS; labels++) {
@@ -207,12 +207,14 @@ static int reverse_addr_parse(knotd_qdata_t *qdata, const synth_template_t *tpl,
 		if (labels < IPV4_ADDR_LABELS) {
 			switch (*label) {
 			case 1:
+				assert(buf4 + 1 < buf4_pos && buf6 < buf6_pos);
 				*--buf6_pos = label[1];
 				*--buf4_pos = label[1];
 				*--buf4_pos = '.';
 				break;
 			case 2:
 			case 3:
+				assert(buf4 + *label < buf4_pos);
 				can_ipv6 = false;
 				buf4_pos -= *label;
 				memcpy(buf4_pos, label + 1, *label);
@@ -226,6 +228,7 @@ static int reverse_addr_parse(knotd_qdata_t *qdata, const synth_template_t *tpl,
 			if (!can_ipv6 || *label != 1) {
 				return KNOT_EINVAL;
 			}
+			assert(buf6 < buf6_pos);
 			*--buf6_pos = label[1];
 
 		}
@@ -314,6 +317,7 @@ static int reverse_addr_parse(knotd_qdata_t *qdata, const synth_template_t *tpl,
 
 		return KNOT_EOK;
 	}
+
 	return KNOT_EINVAL;
 }
 
