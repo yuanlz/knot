@@ -1,4 +1,4 @@
-/*  Copyright (C) 2011 CZ.NIC, z.s.p.o. <knot-dns@labs.nic.cz>
+/*  Copyright (C) 2021 CZ.NIC, z.s.p.o. <knot-dns@labs.nic.cz>
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -13,6 +13,8 @@
     You should have received a copy of the GNU General Public License
     along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
+
+#ifdef USE_AIO
 
 #include <stdlib.h>
 #include <string.h>
@@ -137,7 +139,7 @@ int aio_ctx_init(aio_ctx_t *set, unsigned size)
 
 	memset(set, 0, sizeof(aio_ctx_t));
 
-	int ret = io_setup(128, &set->ctx);
+	int ret = io_setup(size, &set->ctx);
 	if (ret < 0) {
 		return KNOT_ENOMEM;
 	}
@@ -151,14 +153,9 @@ int aio_ctx_clear(aio_ctx_t* set)
 		return KNOT_EINVAL;
 	}
 
-	free(set->usrctx);
-	free(set->timeout);
-	free(set->ev);
-	set->n = 0;
-	set->size = 0;
-	set->ev = NULL;
-	set->usrctx = NULL;
-	set->timeout = NULL;
+	aio_context_t bck = set->ctx;
+	memset(set, 0, sizeof(aio_ctx_t));
+	set->ctx = bck;
 	return KNOT_EOK;
 }
 
@@ -199,9 +196,13 @@ int aio_ctx_wait(aio_ctx_t *set, struct io_event *ev, size_t offset, size_t ev_s
 		list_of_iocb[i - offset] = &(set->ev[i]);
 	}
 
-	int ret = io_submit(set->ctx, ev_size, list_of_iocb);
+	int ret = 0;
+	ret = io_submit(set->ctx, ev_size, list_of_iocb);
+	if (ret < 0) {
+		ret = -errno;
+	}
 	if (ret >= 0) {
-	    return io_getevents(set->ctx, 1, ev_size, ev, &to);
+	    ret = io_getevents(set->ctx, 1, ev_size, ev, timeout > 0 ? &to : NULL);
 	}
 	return ret;
 }
@@ -272,3 +273,5 @@ int aio_ctx_sweep(aio_ctx_t* set, aio_ctx_sweep_cb_t cb, void *data)
 
 	return KNOT_EOK;
 }
+
+#endif

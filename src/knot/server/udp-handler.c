@@ -578,9 +578,9 @@ int udp_master(dthread_t *thread)
 	size_t nifs = handler->server->n_ifaces;
 	apoll_ctx_t fds;
 	apoll_ctx_init(&fds, nifs);
-	unsigned nfds = udp_set_ifaces(handler->server->ifaces, nifs, &fds,
+	unsigned fds_count = udp_set_ifaces(handler->server->ifaces, nifs, &fds,
 	                               thread_id, &xdp_socket);
-	if (nfds == 0) {
+	if (fds_count == 0) {
 		goto finish;
 	}
 
@@ -592,11 +592,9 @@ int udp_master(dthread_t *thread)
 		}
 
 		/* Wait for events. */
-#ifdef USE_AIO
-		struct io_event events[nfds];
-#endif
-		int evs = apoll_ctx_wait(&fds, 0, nfds, -1);
-		if (evs <= 0) {
+		apoll_events_init(events, fds_count);
+		int nfds = apoll_ctx_wait(&fds, events, 0, fds_count, -1);
+		if (nfds <= 0) {
 			if (errno == EINTR || errno == EAGAIN) {
 				continue;
 			}
@@ -605,11 +603,11 @@ int udp_master(dthread_t *thread)
 
 		/* Process the events. */
 		unsigned i = 0;
-		apoll_foreach(&fds) {
+		apoll_foreach(&fds, events, fds_count, it) {
 			if (apoll_it_events(it) == 0) {
 				continue;
 			}
-			evs -= 1;
+			apoll_foreach_done();
 			if (api->udp_recv(apoll_get_fd_from_idx(&fds, i), rq, xdp_socket) > 0) {
 				api->udp_handle(&udp, rq, xdp_socket);
 				api->udp_send(rq, xdp_socket);
@@ -621,7 +619,7 @@ int udp_master(dthread_t *thread)
 finish:
 	api->udp_deinit(rq);
 	mp_delete(mm.ctx);
-	//apoll_ctx_close(&fds);
+	apoll_ctx_close(&fds);
 	apoll_ctx_clear(&fds);
 
 	return KNOT_EOK;

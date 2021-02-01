@@ -124,7 +124,7 @@ static unsigned tcp_set_ifaces(const iface_t *ifaces, size_t n_ifaces,
 		return 0;
 	}
 
-	//apoll_ctx_clear(fds);
+	apoll_ctx_clear(fds);
 	for (const iface_t *i = ifaces; i != ifaces + n_ifaces; i++) {
 		if (i->fd_tcp_count == 0) { // Ignore XDP interface.
 			assert(i->fd_xdp_count > 0);
@@ -256,40 +256,44 @@ static void tcp_wait_for_events(tcp_context_t *tcp)
 	unsigned i = tcp->is_throttled ? tcp->client_threshold : 0;
 
 	/* Wait for events. */
-#ifdef USE_AIO
-	struct io_event events[set->n - i]; 
-#endif
-	int nfds = apoll_ctx_wait(set, i, set->n - i, TCP_SWEEP_INTERVAL);
+	apoll_events_init(events, set->n - i); 
+	int nfds = apoll_ctx_wait(set, events, i, set->n - i, TCP_SWEEP_INTERVAL);
 
 	/* Mark the time of last poll call. */
 	tcp->last_poll_time = time_now();
 
 	/* Process events. */
-	apoll_foreach(set) {
+	apoll_foreach(set, events, nfds, it) {
 		bool should_close = false;
-		if (apoll_it_events(it) & (POLLERR|POLLHUP|POLLNVAL)) {
-			should_close = (apoll_it_idx(it) >= tcp->client_threshold);
-			--nfds;
-		} else if (apoll_it_events(it) & (POLLIN)) {
+		unsigned int idx = apoll_it_idx(set, it);
+		if (apoll_it_event_error(it)) {
+			should_close = (idx >= tcp->client_threshold);
+			apoll_foreach_done();
+		} else if (apoll_it_event_poll(it)) {
 			/* Master sockets - new connection to accept. */
-			if (apoll_it_idx(it) < tcp->client_threshold) {
+			if (idx < tcp->client_threshold) {
 				/* Don't accept more clients than configured. */
 				if (set->n < tcp->max_worker_fds) {
-					tcp_event_accept(tcp, apoll_it_idx(it));
+					tcp_event_accept(tcp, idx);
 				}
 			/* Client sockets - already accepted connection or
 			   closed connection :-( */
-			} else if (tcp_event_serve(tcp, apoll_it_idx(it)) != KNOT_EOK) {
+			} else if (tcp_event_serve(tcp, idx) != KNOT_EOK) {
 				should_close = true;
 			}
-			--nfds;
+			apoll_foreach_done();
 		}
 
 		/* Evaluate. */
 		if (should_close) {
-			close(apoll_get_fd_from_idx(set, apoll_it_idx(it)));
-			apoll_ctx_remove(set, apoll_it_idx(it));
+			close(apoll_get_fd_from_idx(set, idx));
+			apoll_ctx_remove(set, idx);
 		} else {
+			/* 
+			 *	**TODO** I still don't know how to deal with this
+			 *	variable. It is only needed for the classic poll
+			 *	iterator, and it would be good to omit it.
+			 */
 			++i;
 		}
 	}
@@ -376,6 +380,7 @@ finish:
 	free(tcp.iov[0].iov_base);
 	free(tcp.iov[1].iov_base);
 	mp_delete(mm.ctx);
+	apoll_ctx_close(&tcp.set);
 	apoll_ctx_clear(&tcp.set);
 
 	return ret;
