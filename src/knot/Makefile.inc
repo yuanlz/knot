@@ -112,6 +112,8 @@ libknotd_la_SOURCES = \
 	knot/common/apoll.h			\
 	knot/common/aio_ctx.c			\
 	knot/common/aio_ctx.h			\
+	knot/common/epoll_ctx.c			\
+	knot/common/epoll_ctx.h			\
 	knot/common/evsched.c			\
 	knot/common/evsched.h			\
 	knot/common/fdset.c			\

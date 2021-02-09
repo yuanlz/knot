@@ -1,4 +1,4 @@
-/*  Copyright (C) 2017 CZ.NIC, z.s.p.o. <knot-dns@labs.nic.cz>
+/*  Copyright (C) 2021 CZ.NIC, z.s.p.o. <knot-dns@labs.nic.cz>
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -20,41 +20,47 @@
 
 #pragma once
 
+#ifdef USE_EPOLL
+
 #include <stddef.h>
-#include <poll.h>
-#include <sys/time.h>
 #include <signal.h>
+#include <sys/time.h>
+#include <sys/epoll.h>
 
 #define FDSET_INIT_SIZE 256 /* Resize step. */
 
 /*! \brief Set of filedescriptors with associated context and timeouts. */
-typedef struct fdset {
-	unsigned n;          /*!< Active fds. */
-	unsigned size;       /*!< Array size (allocated). */
-	void* *ctx;          /*!< Context for each fd. */
-	struct pollfd *pfd;  /*!< poll state for each fd */
-	time_t *timeout;     /*!< Timeout for each fd (seconds precision). */
-} fdset_t;
+typedef struct epoll_ctx {
+	int efd;
+	unsigned n;               /*!< Active fds. */
+	unsigned size;            /*!< Array size (allocated). */
+	struct epoll_event *ev;   /*!< Epoll event storage for each fd */
+	void* *usrctx;            /*!< Context for each fd. */
+	time_t *timeout;          /*!< Timeout for each fd (seconds precision). */
+    unsigned recv_size;
+    struct epoll_event *recv_ev;
+} epoll_ctx_t;
 
-typedef struct fdset_it {
-    fdset_t *ctx;
-    unsigned idx;
+typedef struct epoll_it {
+    epoll_ctx_t *ctx;
+    struct epoll_event *ptr;
+    int offset;
     int left;
-} fdset_it_t;
+} epoll_it_t;
 
 /*! \brief Mark-and-sweep state. */
-enum fdset_sweep_state {
-	FDSET_KEEP,
-	FDSET_SWEEP
+enum epoll_ctx_sweep_state {
+	EPOLL_CTX_KEEP,
+	EPOLL_CTX_SWEEP
 };
 
 /*! \brief Sweep callback (set, index, data) */
-typedef enum fdset_sweep_state (*fdset_sweep_cb_t)(fdset_t*, int, void*);
+typedef enum epoll_ctx_sweep_state (*epoll_ctx_sweep_cb_t)(epoll_ctx_t*, int, void*);
 
 /*!
  * \brief Initialize fdset to given size.
  */
-int fdset_init(fdset_t *set, unsigned size);
+int epoll_ctx_init(epoll_ctx_t *set, unsigned size);
 
 /*!
  * \brief Destroy FDSET.
@@ -62,7 +68,9 @@ int fdset_init(fdset_t *set, unsigned size);
  * \retval 0 if successful.
  * \retval -1 on error.
  */
-int fdset_clear(fdset_t* set);
+int epoll_ctx_clear(epoll_ctx_t* set);
+
+void epoll_ctx_close(epoll_ctx_t* set);
 
 /*!
  * \brief Add file descriptor to watched set.
@@ -75,11 +83,10 @@ int fdset_clear(fdset_t* set);
  * \retval index of the added fd if successful.
  * \retval -1 on errors.
  */
-int fdset_add(fdset_t *set, int fd, unsigned events, void *ctx);
+int epoll_ctx_add(epoll_ctx_t *set, int fd, unsigned events, void *ctx);
 
 /*!
  * \brief Remove file descriptor from watched set.
- * \brief Keep just becouse of test_fdset.c, remove in future
  *
  * \param set Target set.
  * \param i Index of the removed fd.
@@ -87,11 +94,9 @@ int fdset_add(fdset_t *set, int fd, unsigned events, void *ctx);
  * \retval 0 if successful.
  * \retval -1 on errors.
  */
-int fdset_remove(fdset_t *set, unsigned i);
+int epoll_ctx_remove_it(epoll_ctx_t *set, epoll_it_t *it);
 
-int fdset_remove_it(fdset_t *set, fdset_it_t *it);
-
-int fdset_wait(fdset_t *set, fdset_it_t *it, unsigned offset, unsigned ev_size, int timeout);
+int epoll_ctx_wait(epoll_ctx_t *ctx, epoll_it_t *it, unsigned offset, unsigned ev_size, int timeout);
 
 /*!
  * \brief Set file descriptor watchdog interval.
@@ -109,11 +114,12 @@ int fdset_wait(fdset_t *set, fdset_it_t *it, unsigned offset, unsigned ev_size, 
  * \retval 0 if successful.
  * \retval -1 on errors.
  */
-int fdset_set_watchdog(fdset_t *set, unsigned i, int interval);
+int epoll_ctx_set_watchdog(epoll_ctx_t *set, unsigned i, int interval);
 
-int fdset_get_fd(fdset_t *set, unsigned i);
+unsigned epoll_ctx_get_length(epoll_ctx_t *ctx);
 
-unsigned fdset_get_length(fdset_t *set);
+
+int epoll_ctx_get_fd(epoll_ctx_t *set, unsigned i);
 
 /*!
  * \brief Sweep file descriptors with exceeding inactivity period.
@@ -125,15 +131,19 @@ unsigned fdset_get_length(fdset_t *set);
  * \retval number of sweeped descriptors.
  * \retval -1 on errors.
  */
-int fdset_sweep(fdset_t* set, fdset_sweep_cb_t cb, void *data);
+int epoll_ctx_sweep(epoll_ctx_t* set, epoll_ctx_sweep_cb_t cb, void *data);
 
-void fdset_it_next(fdset_it_t *it);
 
-int fdset_it_done(fdset_it_t *it);
+void epoll_it_next(epoll_it_t *it);
 
-int fdset_it_get_fd(fdset_it_t *it);
+int epoll_it_done(epoll_it_t *it);
 
-unsigned fdset_it_get_idx(fdset_it_t *it);
+int epoll_it_get_fd(epoll_it_t *it);
 
-int fdset_it_ev_is_poll(fdset_it_t *it);
-int fdset_it_ev_is_err(fdset_it_t *it);
+unsigned epoll_it_get_idx(epoll_it_t *it);
+
+int epoll_it_ev_is_poll(epoll_it_t *it);
+
+int epoll_it_ev_is_err(epoll_it_t *it);
+
+#endif

@@ -27,17 +27,25 @@
 #include <sys/time.h>
 #include <linux/aio_abi.h>
 
-#define FDSET_INIT_SIZE 256 /* Resize step. */
+#define AIO_INIT_SIZE 256 /* Resize step. */
 
 /*! \brief Set of filedescriptors with associated context and timeouts. */
 typedef struct aio_ctx {
-    aio_context_t ctx;
+	aio_context_t ctx;
 	unsigned n;               /*!< Active fds. */
 	unsigned size;            /*!< Array size (allocated). */
 	struct iocb *ev;          /*!< Epoll event storage for each fd */
 	void* *usrctx;            /*!< Context for each fd. */
 	time_t *timeout;          /*!< Timeout for each fd (seconds precision). */
+    unsigned recv_size;
+    struct io_event *recv_ev;
 } aio_ctx_t;
+
+typedef struct aio_it {
+    aio_ctx_t *ctx;
+    int left;
+    struct io_event *ptr;
+} aio_it_t;
 
 /*! \brief Mark-and-sweep state. */
 enum aio_ctx_sweep_state {
@@ -85,9 +93,9 @@ int aio_ctx_add(aio_ctx_t *set, int fd, unsigned events, void *ctx);
  * \retval 0 if successful.
  * \retval -1 on errors.
  */
-int aio_ctx_remove(aio_ctx_t *set, unsigned i);
+int aio_ctx_remove_it(aio_ctx_t *set, aio_it_t *it);
 
-int aio_ctx_wait(aio_ctx_t *set, struct io_event *ev, size_t offset, size_t ev_size, int timeout);
+int aio_ctx_wait(aio_ctx_t *ctx, aio_it_t *it, size_t offset, size_t ev_size, int timeout);
 
 /*!
  * \brief Set file descriptor watchdog interval.
@@ -107,6 +115,9 @@ int aio_ctx_wait(aio_ctx_t *set, struct io_event *ev, size_t offset, size_t ev_s
  */
 int aio_ctx_set_watchdog(aio_ctx_t* set, int i, int interval);
 
+int aio_ctx_get_fd(aio_ctx_t *ctx, unsigned i);
+
+unsigned aio_ctx_get_length(aio_ctx_t *ctx);
 /*!
  * \brief Sweep file descriptors with exceeding inactivity period.
  *
@@ -118,5 +129,17 @@ int aio_ctx_set_watchdog(aio_ctx_t* set, int i, int interval);
  * \retval -1 on errors.
  */
 int aio_ctx_sweep(aio_ctx_t* set, aio_ctx_sweep_cb_t cb, void *data);
+
+void aio_it_next(aio_it_t *it);
+
+int aio_it_done(aio_it_t *it);
+
+int aio_it_get_fd(aio_it_t *it);
+
+unsigned aio_it_get_idx(aio_it_t *it);
+
+int aio_it_ev_is_poll(aio_it_t *it);
+
+int aio_it_ev_is_err(aio_it_t *it);
 
 #endif

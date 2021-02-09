@@ -501,7 +501,7 @@ static int iface_udp_fd(const iface_t *iface, int thread_id, bool xdp_thread,
 }
 
 static unsigned udp_set_ifaces(const iface_t *ifaces, size_t n_ifaces, apoll_ctx_t *fds,
-                               int thread_id, void **xdp_socket)
+                               int thread_id, apoll_api_t *poll_api, void **xdp_socket)
 {
 	if (n_ifaces == 0) {
 		return 0;
@@ -517,7 +517,7 @@ static unsigned udp_set_ifaces(const iface_t *ifaces, size_t n_ifaces, apoll_ctx
 		if (fd < 0) {
 			continue;
 		}
-		apoll_ctx_add(fds, fd, POLLIN, NULL);
+		poll_api->ctx_add(fds, fd, POLLIN, NULL);
 		count++;
 	}
 
@@ -562,6 +562,21 @@ int udp_master(dthread_t *thread)
 	}
 	void *rq = api->udp_init();
 
+	/* Choose poll API. */
+	apoll_api_t *poll_api = NULL;
+	conf_val_t poll_api_val = conf_get(conf(), C_SRV, C_POLL_MTHD_UDP);
+	switch (conf_opt(&poll_api_val)) {
+		case POLL_METHOD_AIO:
+			poll_api = &aio_poll_api;
+			break;
+		case POLL_METHOD_EPOLL:
+			poll_api = &epoll_api;
+			break;
+		default:
+			poll_api = &unix_poll_api;
+			break;
+	}
+
 	/* Create big enough memory cushion. */
 	knot_mm_t mm;
 	mm_ctx_mempool(&mm, 16 * MM_DEFAULT_BLKSIZE);
@@ -577,9 +592,9 @@ int udp_master(dthread_t *thread)
 	void *xdp_socket = NULL;
 	size_t nifs = handler->server->n_ifaces;
 	apoll_ctx_t fds;
-	apoll_ctx_init(&fds, nifs);
+	poll_api->ctx_init(&fds, nifs);
 	unsigned fds_count = udp_set_ifaces(handler->server->ifaces, nifs, &fds,
-	                               thread_id, &xdp_socket);
+	                               thread_id, poll_api, &xdp_socket);
 	if (fds_count == 0) {
 		goto finish;
 	}
@@ -592,9 +607,9 @@ int udp_master(dthread_t *thread)
 		}
 
 		/* Wait for events. */
-		apoll_events_init(events, fds_count);
-		int nfds = apoll_ctx_wait(&fds, events, 0, fds_count, -1);
-		if (nfds <= 0) {
+		apoll_it_t it;
+		int ret = poll_api->ctx_poll(&fds, &it, 0, fds_count, -1);
+		if (ret <= 0) {
 			if (errno == EINTR || errno == EAGAIN) {
 				continue;
 			}
@@ -602,25 +617,19 @@ int udp_master(dthread_t *thread)
 		}
 
 		/* Process the events. */
-		unsigned i = 0;
-		apoll_foreach(&fds, events, fds_count, it) {
-			if (apoll_it_events(it) == 0) {
-				continue;
-			}
-			apoll_foreach_done();
-			if (api->udp_recv(apoll_get_fd_from_idx(&fds, i), rq, xdp_socket) > 0) {
+		for(; !poll_api->it_done(&it); poll_api->it_next(&it)) {
+			if (api->udp_recv(poll_api->it_get_fd(&it), rq, xdp_socket) > 0) {
 				api->udp_handle(&udp, rq, xdp_socket);
 				api->udp_send(rq, xdp_socket);
 			}
-			++i;
 		}
 	}
 
 finish:
 	api->udp_deinit(rq);
 	mp_delete(mm.ctx);
-	apoll_ctx_close(&fds);
-	apoll_ctx_clear(&fds);
+	poll_api->ctx_close(&fds);
+	poll_api->ctx_clear(&fds);
 
 	return KNOT_EOK;
 }

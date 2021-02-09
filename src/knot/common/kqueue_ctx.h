@@ -20,8 +20,6 @@
 
 #pragma once
 
-#define USE_KQUEUE 1
-
 #ifdef USE_KQUEUE
 
 #include <stddef.h>

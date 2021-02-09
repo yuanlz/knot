@@ -18,6 +18,7 @@
 #include <string.h>
 #include <unistd.h>
 #include <time.h>
+#include <assert.h>
 #include "knot/common/fdset.h"
 #include "contrib/time.h"
 #include "libknot/errcode.h"
@@ -83,6 +84,29 @@ int fdset_add(fdset_t *set, int fd, unsigned events, void *ctx)
 	return i;
 }
 
+int fdset_remove_it(fdset_t *set, fdset_it_t *it)
+{
+	if (set == NULL || it == NULL) {
+		return KNOT_EINVAL;
+	}
+
+	/* Decrement number of elms. */
+	--set->n;
+
+	/* Nothing else if it is the last one.
+	 * Move last -> i if some remain. */
+	unsigned last = set->n; /* Already decremented */
+	unsigned int i = it->idx;
+	if (i < last) {
+		set->pfd[i] = set->pfd[last];
+		set->timeout[i] = set->timeout[last];
+		set->ctx[i] = set->ctx[last];
+	}
+	it->idx--;
+
+	return KNOT_EOK;
+}
+
 int fdset_remove(fdset_t *set, unsigned i)
 {
 	if (set == NULL || i >= set->n) {
@@ -104,7 +128,19 @@ int fdset_remove(fdset_t *set, unsigned i)
 	return KNOT_EOK;
 }
 
-int fdset_set_watchdog(fdset_t* set, int i, int interval)
+int fdset_wait(fdset_t *set, fdset_it_t *it, unsigned offset, unsigned ev_size, int timeout)
+{
+	it->ctx = set;
+	it->idx = offset;
+
+	it->left = poll(&set->pfd[offset], ev_size, 1000 * timeout);
+	while(it->left > 0 && set->pfd[it->idx].revents == 0) {
+		it->idx++;
+	}
+	return it->left;
+}
+
+int fdset_set_watchdog(fdset_t* set, unsigned i, int interval)
 {
 	if (set == NULL || i >= set->n) {
 		return KNOT_EINVAL;
@@ -123,6 +159,21 @@ int fdset_set_watchdog(fdset_t* set, int i, int interval)
 	return KNOT_EOK;
 }
 
+int fdset_get_fd(fdset_t *set, unsigned i)
+{
+	if (set == NULL || i >= set->n) {
+		return KNOT_EINVAL;
+	}
+
+	return set->pfd[i].fd;
+}
+
+
+unsigned fdset_get_length(fdset_t *set)
+{
+	return set->n;
+}
+
 int fdset_sweep(fdset_t* set, fdset_sweep_cb_t cb, void *data)
 {
 	if (set == NULL || cb == NULL) {
@@ -137,7 +188,8 @@ int fdset_sweep(fdset_t* set, fdset_sweep_cb_t cb, void *data)
 
 		/* Check sweep state, remove if requested. */
 		if (set->timeout[i] > 0 && set->timeout[i] <= now.tv_sec) {
-			if (cb(set, i, data) == FDSET_SWEEP) {
+			int fd = fdset_get_fd(set, i);
+			if (cb(set, fd, data) == FDSET_SWEEP) {
 				if (fdset_remove(set, i) == KNOT_EOK)
 					continue; /* Stay on the index. */
 			}
@@ -148,4 +200,47 @@ int fdset_sweep(fdset_t* set, fdset_sweep_cb_t cb, void *data)
 	}
 
 	return KNOT_EOK;
+}
+
+void fdset_it_next(fdset_it_t *it)
+{
+	it->left--;
+	if (it->left > 0) {
+		do {
+			it->idx++;
+		} while (it->ctx->pfd[it->idx].revents == 0);
+	}
+}
+
+int fdset_it_done(fdset_it_t *it)
+{
+	return it->left <= 0;
+}
+
+
+int fdset_it_get_fd(fdset_it_t *it)
+{
+	if (it == NULL) {
+		return KNOT_EINVAL;
+	}
+
+	return it->ctx->pfd[it->idx].fd;
+}
+
+unsigned fdset_it_get_idx(fdset_it_t *it)
+{
+	assert(it);
+	return it->idx;
+}
+
+int fdset_it_ev_is_poll(fdset_it_t *it)
+{
+	assert(it);
+	return it->ctx->pfd[it->idx].revents & POLLIN;
+}
+
+int fdset_it_ev_is_err(fdset_it_t *it)
+{
+	assert(it);
+	return it->ctx->pfd[it->idx].revents & (POLLERR|POLLHUP|POLLNVAL);
 }

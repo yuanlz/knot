@@ -14,6 +14,8 @@
     along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
+#define USE_AIO 1
+
 #ifdef USE_AIO
 
 #include <stdlib.h>
@@ -21,6 +23,7 @@
 #include <unistd.h>
 #include <time.h>
 #include <assert.h>
+#include <poll.h>
 #include <linux/aio_abi.h>
 #include <sys/syscall.h>
 #include "knot/common/aio_ctx.h"
@@ -121,7 +124,7 @@ do_syscall:
 		return KNOT_ENOMEM; \
 	(p) = tmp;
 
-static int epoll_set_resize(aio_ctx_t *set, unsigned size)
+static int aio_ctx_resize(aio_ctx_t *set, unsigned size)
 {
 	void *tmp = NULL;
 	MEM_RESIZE(tmp, set->usrctx, size);
@@ -144,7 +147,7 @@ int aio_ctx_init(aio_ctx_t *set, unsigned size)
 		return KNOT_ENOMEM;
 	}
 	
-	return epoll_set_resize(set, size);
+	return aio_ctx_resize(set, size);
 }
 
 int aio_ctx_clear(aio_ctx_t* set)
@@ -171,7 +174,7 @@ int aio_ctx_add(aio_ctx_t *set, int fd, unsigned events, void *ctx)
 	}
 
 	/* Realloc needed. */
-	if (set->n == set->size && epoll_set_resize(set, set->size + FDSET_INIT_SIZE))
+	if (set->n == set->size && aio_ctx_resize(set, set->size + AIO_INIT_SIZE))
 		return KNOT_ENOMEM;
 
 	/* Initialize. */
@@ -179,13 +182,24 @@ int aio_ctx_add(aio_ctx_t *set, int fd, unsigned events, void *ctx)
 	set->ev[i].aio_fildes = fd;
 	set->ev[i].aio_lio_opcode = IOCB_CMD_POLL;
 	set->ev[i].aio_buf = events;
+	set->ev[i].aio_data = 0;
 	set->usrctx[i] = ctx;
 	set->timeout[i] = 0;
 	return i;
 }
 
-int aio_ctx_wait(aio_ctx_t *set, struct io_event *ev, size_t offset, size_t ev_size, int timeout)
+int aio_ctx_wait(aio_ctx_t *ctx, aio_it_t *it, size_t offset, size_t ev_size, int timeout)
 {
+	if (ctx->recv_size != ctx->size) {
+		void *tmp = NULL;
+		MEM_RESIZE(tmp, ctx->recv_ev, ctx->size);
+		ctx->recv_size = ctx->size;
+	}
+
+	it->ctx = ctx;
+	it->ptr = ctx->recv_ev;
+	it->left = 0;
+
     struct timespec to = {
 		.tv_nsec = 0,
 		.tv_sec = timeout
@@ -193,22 +207,41 @@ int aio_ctx_wait(aio_ctx_t *set, struct io_event *ev, size_t offset, size_t ev_s
 
 	struct iocb *list_of_iocb[ev_size];
 	for (int i = offset; i < offset + ev_size; ++i) {
-		list_of_iocb[i - offset] = &(set->ev[i]);
+		list_of_iocb[i - offset] = &(ctx->ev[i]);
 	}
 
 	int ret = 0;
-	ret = io_submit(set->ctx, ev_size, list_of_iocb);
+	ret = io_submit(ctx->ctx, ev_size, list_of_iocb);
 	if (ret < 0) {
-		ret = -errno;
+		return ret;
 	}
-	if (ret >= 0) {
-	    ret = io_getevents(set->ctx, 1, ev_size, ev, timeout > 0 ? &to : NULL);
-	}
-	return ret;
+	return it->left = io_getevents(ctx->ctx, 1, ev_size, ctx->recv_ev, timeout > 0 ? &to : NULL);
 }
 
-int aio_ctx_remove(aio_ctx_t *set, unsigned i)
+static int aio_ctx_remove(aio_ctx_t *set, unsigned i)
 {
+	if (set == NULL || i >= set->n) {
+		return KNOT_EINVAL;
+	}
+
+	/* Decrement number of elms. */
+	--set->n;
+
+	/* Nothing else if it is the last one.
+	 * Move last -> i if some remain. */
+	unsigned last = set->n; /* Already decremented */
+	if (i < last) {
+		set->ev[i] = set->ev[last];
+		set->timeout[i] = set->timeout[last];
+		set->usrctx[i] = set->usrctx[last];
+	}
+
+	return KNOT_EOK;
+}
+
+int aio_ctx_remove_it(aio_ctx_t *set, aio_it_t *it)
+{
+	unsigned i = aio_it_get_idx(it);
 	if (set == NULL || i >= set->n) {
 		return KNOT_EINVAL;
 	}
@@ -247,6 +280,21 @@ int aio_ctx_set_watchdog(aio_ctx_t* set, int i, int interval)
 	return KNOT_EOK;
 }
 
+int aio_ctx_get_fd(aio_ctx_t *ctx, unsigned i)
+{
+	if (ctx == NULL || i >= ctx->n) {
+		return KNOT_EINVAL;
+	}
+
+	return ctx->ev[i].aio_fildes;
+}
+
+unsigned aio_ctx_get_length(aio_ctx_t *ctx)
+{
+	assert(ctx);
+	return ctx->n;
+}
+
 int aio_ctx_sweep(aio_ctx_t* set, aio_ctx_sweep_cb_t cb, void *data)
 {
 	if (set == NULL || cb == NULL) {
@@ -261,7 +309,8 @@ int aio_ctx_sweep(aio_ctx_t* set, aio_ctx_sweep_cb_t cb, void *data)
 
 		/* Check sweep state, remove if requested. */
 		if (set->timeout[i] > 0 && set->timeout[i] <= now.tv_sec) {
-			if (cb(set, i, data) == AIO_CTX_SWEEP) {
+			unsigned fd = aio_ctx_get_fd(set, i);
+			if (cb(set, fd, data) == AIO_CTX_SWEEP) {
 				if (aio_ctx_remove(set, i) == KNOT_EOK)
 					continue; /* Stay on the index. */
 			}
@@ -272,6 +321,41 @@ int aio_ctx_sweep(aio_ctx_t* set, aio_ctx_sweep_cb_t cb, void *data)
 	}
 
 	return KNOT_EOK;
+}
+
+void aio_it_next(aio_it_t *it) {
+	it->left--;
+	if (it->left <= 0) {
+		it->ptr++;
+	}
+}
+
+int aio_it_done(aio_it_t *it) {
+	return it->left <= 0;
+}
+
+int aio_it_get_fd(aio_it_t *it)
+{
+	assert(it != NULL);
+	return ((struct iocb *)it->ptr->obj)->aio_fildes;
+}
+
+unsigned aio_it_get_idx(aio_it_t *it)
+{
+	assert(it != NULL);
+	return ((struct iocb *)it->ptr->obj - it->ctx->ev);
+}
+
+int aio_it_ev_is_poll(aio_it_t *it)
+{
+	assert(it);
+	return ((struct iocb *)it->ptr->obj)->aio_buf & (POLLIN);
+}
+
+int aio_it_ev_is_err(aio_it_t *it)
+{
+	assert(it);
+	return ((struct iocb *)it->ptr->obj)->aio_buf & (POLLERR|POLLHUP|POLLNVAL);
 }
 
 #endif
