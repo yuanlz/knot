@@ -148,6 +148,9 @@ _public_
 int knot_xdp_tcp_send(knot_xdp_socket_t *socket, knot_tcp_relay_t relays[],
                       uint32_t relay_count)
 {
+	if (relay_count == 0) {
+		return KNOT_EOK;
+	}
 	if (socket == NULL || relays == NULL) {
 		return KNOT_EINVAL;
 	}
