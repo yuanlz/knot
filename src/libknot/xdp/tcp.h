@@ -44,13 +44,14 @@ typedef struct {
  * \param msg_count    Number of received packets.
  * \param relays       Out: connection changes and data.
  * \param relay_count  Out: number of connection changes and data.
+ * \param warning_count  Out: number of failiures to ACK incomming packet (not counted to relay_count).
  * \param mm           Memory context.
  *
  * \return KNOT_E*
  */
 int knot_xdp_tcp_relay(knot_xdp_socket_t *socket, knot_xdp_msg_t msgs[],
                        uint32_t msg_count, knot_tcp_relay_t *relays[],
-                       uint32_t *relay_count, knot_mm_t *mm);
+                       uint32_t *relay_count, uint32_t *warning_count, knot_mm_t *mm);
 
 /*!
  * \brief Send TCP packets.

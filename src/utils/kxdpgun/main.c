@@ -76,6 +76,7 @@ typedef struct {
 	uint64_t rst_recv;
 	uint64_t size_recv;
 	uint64_t wire_recv;
+	uint64_t warnings;
 	uint64_t rcodes_recv[RCODE_MAX];
 	pthread_mutex_t mutex;
 } kxdpgun_stats_t;
@@ -134,6 +135,7 @@ static void clear_stats(kxdpgun_stats_t *st)
 	st->rst_recv    = 0;
 	st->size_recv   = 0;
 	st->wire_recv   = 0;
+	st->warnings    = 0;
 	st->collected   = 0;
 	memset(st->rcodes_recv, 0, sizeof(st->rcodes_recv));
 	pthread_mutex_unlock(&st->mutex);
@@ -150,6 +152,7 @@ static size_t collect_stats(kxdpgun_stats_t *into, const kxdpgun_stats_t *what)
 	into->rst_recv    += what->rst_recv;
 	into->size_recv   += what->size_recv;
 	into->wire_recv   += what->wire_recv;
+	into->warnings    += what->warnings;
 	for (int i = 0; i < RCODE_MAX; i++) {
 		into->rcodes_recv[i] += what->rcodes_recv[i];
 	}
@@ -196,6 +199,10 @@ static void print_stats(kxdpgun_stats_t *st, bool tcp, bool recv)
 		}
 	}
 	printf("duration: %lu s\n", (st->duration / (1000 * 1000)));
+	printf("warnings: %lu\n", st->warnings);
+	if (st->warnings > 0) {
+		printf("Warning: lower rate than configured might have been sent, also the query stream might have been fluctuating.\n");
+	}
 
 	pthread_mutex_unlock(&st->mutex);
 }
@@ -356,7 +363,7 @@ void *xdp_gun_thread(void *_ctx)
 				knot_xdp_send_prepare(xsk);
 				int alloced = alloc_pkts(pkts, xsk, ctx, tick);
 				if (alloced < ctx->at_once) {
-					errors++;
+					local_stats.warnings += ctx->at_once - alloced;
 					if (alloced == 0) {
 						break;
 					}
@@ -416,8 +423,9 @@ void *xdp_gun_thread(void *_ctx)
 				}
 				if (ctx->tcp) {
 					knot_tcp_relay_t *relays = NULL;
-					uint32_t n_relays = 0;
-					ret = knot_xdp_tcp_relay(xsk, pkts, recvd, &relays, &n_relays, &mm);
+					uint32_t n_relays = 0, warnings = 0;
+					ret = knot_xdp_tcp_relay(xsk, pkts, recvd, &relays, &n_relays, &warnings, &mm);
+					local_stats.warnings += warnings;
 					if (ret != KNOT_EOK) {
 						errors++;
 						break;

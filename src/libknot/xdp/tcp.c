@@ -51,7 +51,7 @@ static int add_relay(knot_tcp_relay_t *relays[], uint32_t *max_relays,
 _public_
 int knot_xdp_tcp_relay(knot_xdp_socket_t *socket, knot_xdp_msg_t msgs[],
                        uint32_t msg_count, knot_tcp_relay_t *relays[],
-                       uint32_t *relay_count, knot_mm_t *mm)
+                       uint32_t *relay_count, uint32_t *warning_count, knot_mm_t *mm)
 {
 	if (msg_count == 0) {
 		return KNOT_EOK;
@@ -72,6 +72,7 @@ int knot_xdp_tcp_relay(knot_xdp_socket_t *socket, knot_xdp_msg_t msgs[],
 		knot_xdp_msg_t *ack = &acks[n_acks++]; \
 		int ackret = knot_xdp_reply_alloc(socket, (msg), ack); \
 		if (ackret != KNOT_EOK) { \
+			(*warning_count)++; \
 			n_acks--; \
 			continue; \
 		} \
