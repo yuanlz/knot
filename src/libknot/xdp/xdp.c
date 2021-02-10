@@ -390,7 +390,7 @@ int knot_xdp_send_finish(knot_xdp_socket_t *socket)
 		socket->kernel_needs_wakeup = false;
 	}
 	if (is_again) {
-		return KNOT_EAGAIN;
+		return KNOT_EOK;
 	} else if (is_ok) {
 		return KNOT_EOK;
 	} else {
