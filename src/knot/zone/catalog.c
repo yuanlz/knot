@@ -722,6 +722,9 @@ static int finalize_member(catalog_upd_val_t *val)
 			break;
 		case MEMB_UPD_ADD:
 			val->ord = next_ord++;
+			if (val->ord == UINT32_MAX) { // this will never happen
+				return KNOT_ELIMIT;
+			}
 			if (final_cur->type != MEMB_UPD_ORIG && final_cur->type != MEMB_UPD_ADD) {
 				final_cur = val;
 			}
