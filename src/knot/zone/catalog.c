@@ -551,6 +551,8 @@ static bool upd_cancel_out(catalog_upd_val_t **p_orig, const knot_dname_t *new_o
                            int new_bail, catalog_upd_type_t new_type)
 {
 	catalog_upd_val_t *orig = *p_orig;
+	assert(orig->type == MEMB_UPD_ADD || orig->type == MEMB_UPD_REM);
+
 	if (knot_dname_is_equal(orig->owner, new_owner) &&
 	    orig->catzone - orig->owner == new_bail &&
 	    orig->type != new_type) {
@@ -1000,7 +1002,7 @@ int catalog_update_commit(catalog_update_t *u, catalog_t *cat)
 	if (ret == KNOT_EOK) {
 		ret = catalog_commit(cat);
 	}
-	return KNOT_EOK;
+	return ret;
 }
 
 static void print_dname(const knot_dname_t *d)
