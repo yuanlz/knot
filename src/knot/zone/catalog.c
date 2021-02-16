@@ -188,6 +188,15 @@ int catalog_commit(catalog_t *cat)
 	return KNOT_EOK;
 }
 
+void catalog_abort(catalog_t *cat)
+{
+	knot_lmdb_txn_t *rw_txn = rcu_xchg_pointer(&cat->rw_txn, NULL);
+	if (rw_txn != NULL) {
+		knot_lmdb_abort(rw_txn);
+		free(rw_txn);
+	}
+}
+
 void catalog_commit_cleanup(catalog_t *cat)
 {
 	knot_lmdb_txn_t *old_ro_txn = rcu_xchg_pointer(&cat->old_ro_txn, NULL);
@@ -678,9 +687,15 @@ inline static bool same_ow_cat(catalog_upd_val_t *a, catalog_upd_val_t *b)
 }
 
 /*!
- * \brief TODO huge comment
- * \param val
- * \return
+ * \brief Collect all state and changes to one member, set correct flags and ord to all records.
+ *
+ * \param val   Linked list of val, starting with existing records in catalogdb (with flag MEMB_UPD_ORIG).
+ *
+ * Iterating through all the existing (MEMB_UPD_ORIG), and change (MEMB_UPD_REM/ADD) records
+ * belonging to one member, we find cancel-outs, and search for the record that will have effect
+ * ( = lowest 'ord' among records) after applying the changes. Also detect if member shall be purged.
+ *
+ * \return KNOT_E*
  */
 static int finalize_member(catalog_upd_val_t *val)
 {
@@ -983,8 +998,9 @@ int catalog_update_commit(catalog_update_t *u, catalog_t *cat)
 				break;
 			case MEMB_UPD_UPD_EFFECT:
 			case MEMB_UPD_UPD_PURGE:
+				assert(val->ord > 0);
 				ret = catalog_add(cat, val->member, val->owner, val->catzone, val->ord); // possible re-add with same ord
-				break; // TODO check that already first in catalog ?
+				break;
 			case MEMB_UPD_REM:
 			case MEMB_UPD_REM_EFFECT:
 				ret = catalog_del(cat, val->member, val->ord);
@@ -1001,6 +1017,8 @@ int catalog_update_commit(catalog_update_t *u, catalog_t *cat)
 	catalog_it_free(it);
 	if (ret == KNOT_EOK) {
 		ret = catalog_commit(cat);
+	} else {
+		catalog_abort(cat);
 	}
 	return ret;
 }

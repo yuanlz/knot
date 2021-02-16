@@ -114,6 +114,11 @@ int catalog_begin(catalog_t *cat);
 int catalog_commit(catalog_t *cat);
 
 /*!
+ * \brief Abort temporary RW txn.
+ */
+void catalog_abort(catalog_t *cat);
+
+/*!
  * \brief Free up old txns.
  *
  * \note This must be called after catalog_commit() with a delay of synchronnize_rcu().
