@@ -713,7 +713,7 @@ static int finalize_member(catalog_upd_val_t *val)
 			break;
 		case MEMB_UPD_REM:
 			// find what is being removed
-			for (i = final_cur; i != val; i = i->next) {
+			for (i = final_cur; i != val && i != NULL; i = i->next) { // i can become NULL iff final_cur is NULL
 				if ((i->type == MEMB_UPD_ORIG || i->type == MEMB_UPD_ADD) && same_ow_cat(i, val)) {
 					// removal of existing record
 					val->ord = i->ord;
@@ -731,7 +731,7 @@ static int finalize_member(catalog_upd_val_t *val)
 					break; // removal accepted, exit for loop
 				}
 			}
-			if (i == val) { // nothing found to be removed
+			if (i == val || i == NULL) { // nothing found to be removed
 				val->type = MEMB_UPD_INVALID;
 			}
 			break;
