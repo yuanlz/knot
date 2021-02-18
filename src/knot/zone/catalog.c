@@ -838,7 +838,7 @@ void catalog_print(catalog_t *cat)
 {
 	ssize_t total = 0;
 
-	printf(";; <catalog zone> <record owner> <record zone>\n");
+	printf(";; <member zone> <record owner> <catalog zone>\n");
 
 	if (cat != NULL) {
 		int ret = catalog_open(cat);
@@ -851,6 +851,7 @@ void catalog_print(catalog_t *cat)
 			const knot_dname_t *mem, *ow, *cz;
 			catalog_curval(cat, &mem, &ow, &cz);
 			print_dname3("", mem, ow, cz);
+			printf("\n");
 			total++;
 		}
 	}
