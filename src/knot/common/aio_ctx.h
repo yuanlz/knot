@@ -134,6 +134,8 @@ void aio_it_next(aio_it_t *it);
 
 int aio_it_done(aio_it_t *it);
 
+void aio_it_commit(aio_it_t *it);
+
 int aio_it_get_fd(aio_it_t *it);
 
 unsigned aio_it_get_idx(aio_it_t *it);

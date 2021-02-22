@@ -52,6 +52,7 @@ typedef struct apoll_api {
 	int (*ctx_sweep)(apoll_ctx_t *, apoll_ctx_sweep_cb_t, void *);
 	void (*it_next)(apoll_it_t *);
 	int (*it_done)(apoll_it_t *);
+	void (*it_commit)(apoll_it_t *);
 	int (*it_get_fd)(apoll_it_t *);
 	unsigned (*it_get_idx)(apoll_it_t *);
 	int (*it_ev_is_pollin)(apoll_it_t *);
@@ -132,6 +133,9 @@ typedef struct apoll_api {
 		return epoll_it_done(&it->epoll);
 	}
 
+	static void _epoll_it_commit(apoll_it_t *it)
+	{}
+
 	static int _epoll_it_get_fd(apoll_it_t *it)
 	{
 		assert(it);
@@ -169,6 +173,7 @@ typedef struct apoll_api {
 		.ctx_sweep = _epoll_ctx_sweep,
 		.it_next = _epoll_it_next,
 		.it_done = _epoll_it_done,
+		.it_commit = _epoll_it_commit,
 		.it_get_fd = _epoll_it_get_fd,
 		.it_get_idx = _epoll_it_get_idx,
 		.it_ev_is_pollin = _epoll_it_ev_is_poll,
@@ -248,6 +253,12 @@ typedef struct apoll_api {
 		return aio_it_done(&it->aio);
 	}
 
+	static void _aio_it_commit(apoll_it_t *it)
+	{
+		assert(it);
+		aio_it_commit(it);
+	}
+
 	static int _aio_it_get_fd(apoll_it_t *it)
 	{
 		assert(it);
@@ -287,6 +298,7 @@ typedef struct apoll_api {
 		.ctx_sweep = _aio_ctx_sweep,
 		.it_next = _aio_it_next,
 		.it_done = _aio_it_done,
+		.it_commit = _aio_it_commit,
 		.it_get_fd = _aio_it_get_fd,
 		.it_get_idx = _aio_it_get_idx,
 		.it_ev_is_pollin = _aio_it_ev_is_poll,
@@ -385,6 +397,9 @@ typedef struct apoll_api {
 		return fdset_it_done(&it->poll);
 	}
 
+	static void _poll_it_commit(apoll_it_t *it)
+	{}
+
 	static int _poll_it_get_fd(apoll_it_t *it)
 	{
 		assert(it);
@@ -422,6 +437,7 @@ typedef struct apoll_api {
 		.ctx_sweep = _poll_ctx_sweep,
 		.it_next = _poll_it_next,
 		.it_done = _poll_it_done,
+		.it_commit = _poll_it_commit,
 		.it_get_fd = _poll_it_get_fd,
 		.it_get_idx = _poll_it_get_idx,
 		.it_ev_is_pollin = _poll_it_ev_is_poll,

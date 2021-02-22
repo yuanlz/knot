@@ -288,6 +288,7 @@ static void tcp_wait_for_events(tcp_context_t *tcp)
 			tcp->poll_api->ctx_remove(set, &it);
 		}
 	}
+	tcp->poll_api->it_commit(&it);
 }
 
 int tcp_master(dthread_t *thread)

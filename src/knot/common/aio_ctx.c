@@ -246,17 +246,18 @@ int aio_ctx_remove_it(aio_ctx_t *set, aio_it_t *it)
 		return KNOT_EINVAL;
 	}
 
-	/* Decrement number of elms. */
-	--set->n;
+	// /* Decrement number of elms. */
+	// --set->n;
 
-	/* Nothing else if it is the last one.
-	 * Move last -> i if some remain. */
-	unsigned last = set->n; /* Already decremented */
-	if (i < last) {
-		set->ev[i] = set->ev[last];
-		set->timeout[i] = set->timeout[last];
-		set->usrctx[i] = set->usrctx[last];
-	}
+	// /* Nothing else if it is the last one.
+	//  * Move last -> i if some remain. */
+	// unsigned last = set->n; /* Already decremented */
+	// if (i < last) {
+	// 	set->ev[i] = set->ev[last];
+	// 	set->timeout[i] = set->timeout[last];
+	// 	set->usrctx[i] = set->usrctx[last];
+	// }
+	((struct iocb *)it->ptr->obj)->aio_data = 1;
 
 	return KNOT_EOK;
 }
@@ -323,15 +324,27 @@ int aio_ctx_sweep(aio_ctx_t* set, aio_ctx_sweep_cb_t cb, void *data)
 	return KNOT_EOK;
 }
 
-void aio_it_next(aio_it_t *it) {
+void aio_it_next(aio_it_t *it)
+{
 	it->left--;
 	if (it->left <= 0) {
 		it->ptr++;
 	}
 }
 
-int aio_it_done(aio_it_t *it) {
+int aio_it_done(aio_it_t *it)
+{
 	return it->left <= 0;
+}
+
+void aio_it_commit(aio_it_t *it)
+{
+	aio_ctx_t *ctx = it->ctx;
+	for (int i = 0; i < ctx->n; ++i) {
+		if (ctx->ev[i].aio_data) {
+			aio_ctx_remove(ctx, i);
+		}
+	}
 }
 
 int aio_it_get_fd(aio_it_t *it)
