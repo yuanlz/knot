@@ -740,25 +740,37 @@ uint8_t *knot_dname_lf(const knot_dname_t *src, knot_dname_storage_t storage)
 		return NULL;
 	}
 
-	/* Writing from the end. */
-	storage[KNOT_DNAME_MAXLEN - 1] = '\0';
-	size_t idx = KNOT_DNAME_MAXLEN - 1;
+	uint8_t *dst = storage + KNOT_DNAME_MAXLEN - 1;
 
 	while (*src != 0) {
-		size_t len = *src + 1;
+		size_t len = *src;
 
-		assert(idx >= len);
-		idx -= len;
-		memcpy(&storage[idx], src, len);
-		storage[idx] = '\0';
+		*dst = '\0';
+		dst -= len + 1;
+		assert(dst >= storage);
 
-		src += len;
+		switch (len) {
+		case 8: dst[8] = src[8]; // FALLTHGROUGH
+		case 7: dst[7] = src[7]; // FALLTHGROUGH
+		case 6: dst[6] = src[6]; // FALLTHGROUGH
+		case 5: dst[5] = src[5]; // FALLTHGROUGH
+		case 4: dst[4] = src[4]; // FALLTHGROUGH
+		case 3: dst[3] = src[3]; // FALLTHGROUGH
+		case 2: dst[2] = src[2]; // FALLTHGROUGH
+		case 1: dst[1] = src[1]; // FALLTHGROUGH
+			break;
+		default:
+			memcpy(dst + 1 , src + 1, len);
+			break;
+		}
+
+		src += len + 1;
 	}
 
-	assert(KNOT_DNAME_MAXLEN >= 1 + idx);
-	storage[idx] = KNOT_DNAME_MAXLEN - 1 - idx;
+	*dst = storage + KNOT_DNAME_MAXLEN - 1 - dst;
+	assert(dst >= storage);
 
-	return &storage[idx];
+	return dst;
 }
 
 _public_
