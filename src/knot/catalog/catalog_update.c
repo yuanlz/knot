@@ -235,14 +235,12 @@ static bool check_member(catalog_upd_val_t *val, conf_t *conf, catalog_t *cat)
 	return true;
 }
 
-void catalog_update_finalize(catalog_update_t *u, catalog_t *cat)
+void catalog_update_finalize(catalog_update_t *u, catalog_t *cat, conf_t *conf)
 {
-	conf_t *cnf = conf();
-
 	catalog_it_t *it = catalog_it_begin(u);
 	while (!catalog_it_finished(it)) {
 		catalog_upd_val_t *val = catalog_it_val(it);
-		if (!check_member(val, cnf, cat)) {
+		if (!check_member(val, conf, cat)) {
 			val->type = (val->type == CAT_UPD_ADD ? CAT_UPD_INVALID : CAT_UPD_REM);
 		}
 		catalog_it_next(it);
