@@ -235,15 +235,6 @@ static bool check_member(catalog_upd_val_t *val, conf_t *conf, catalog_t *cat)
 	return true;
 }
 
-static int rem_conf_conflict(const knot_dname_t *mem, const knot_dname_t *ow,
-                             const knot_dname_t *cz, void *ctx)
-{
-	if (conf_rawid_exists(conf(), C_ZONE, mem, knot_dname_size(mem))) {
-		return catalog_update_add(ctx, mem, ow, cz, true, NULL);
-	}
-	return KNOT_EOK;
-}
-
 void catalog_update_finalize(catalog_update_t *u, catalog_t *cat)
 {
 	conf_t *cnf = conf();
@@ -257,14 +248,6 @@ void catalog_update_finalize(catalog_update_t *u, catalog_t *cat)
 		catalog_it_next(it);
 	}
 	catalog_it_free(it);
-
-	// TODO this takes time. Is it really useful?
-	// it checks if the configuration file has not
-	// changed in the way to create confict with
-	// existing member zone and let config take precendence
-	if (cat->ro_txn != NULL) {
-		(void)catalog_apply(cat, NULL, rem_conf_conflict, u, false);
-	}
 }
 
 int catalog_update_commit(catalog_update_t *u, catalog_t *cat)
