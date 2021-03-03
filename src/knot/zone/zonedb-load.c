@@ -425,23 +425,20 @@ static knot_zonedb_t *create_zonedb(conf_t *conf, server_t *server, list_t *expi
 
 	catalog_commit_cleanup(&server->catalog);
 
-	int catret = catalog_update_commit(&server->catalog_upd, &server->catalog);
-	if (catret < 0) {
-		log_error("catalog, failed to process (%s)", knot_strerror(catret));
-	}
-
-	catalog_it_t *it = catalog_it_begin(&server->catalog_upd);
-	while (!catalog_it_finished(it) && catret == KNOT_EOK) {
-		catalog_upd_val_t *val = catalog_it_val(it);
-		zone_t *zone = add_member_zone(val, db_new, server, conf);
-		if (zone != NULL) {
-			knot_zonedb_insert(db_new, zone);
+	int ret = catalog_update_commit(&server->catalog_upd, &server->catalog);
+	if (ret == KNOT_EOK) {
+		catalog_it_t *it = catalog_it_begin(&server->catalog_upd);
+		while (!catalog_it_finished(it)) {
+			catalog_upd_val_t *val = catalog_it_val(it);
+			zone_t *zone = add_member_zone(val, db_new, server, conf);
+			if (zone != NULL) {
+				knot_zonedb_insert(db_new, zone);
+			}
+			catalog_it_next(it);
 		}
-		catalog_it_next(it);
-	}
-	catalog_it_free(it);
-	if (catret < 0) {
-		log_error("catalog, failed to process (%s)", knot_strerror(catret));
+		catalog_it_free(it);
+	} else {
+		log_error("catalog, failed to apply changes (%s)", knot_strerror(ret));
 	}
 
 	return db_new;
